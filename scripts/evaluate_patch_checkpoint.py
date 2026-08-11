@@ -57,6 +57,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-devices", default="")
     parser.add_argument("--rollout-backend", choices=("legacy_cpu", "cached_cpu", "torch_gpu"), default=None)
     parser.add_argument("--external_nuclear_bins_path", type=str, default=None)
+    parser.add_argument(
+        "--eval-run-path-file",
+        type=str,
+        default=None,
+        help="Write the completed evaluation run directory to this file.",
+    )
     add_ppo_format_assignment_eval_args(
         parser,
         default_eval_run_name="human_colorectal_patch_eval",
@@ -282,6 +288,10 @@ def main() -> None:
         with (out_dir / "patch_eval_pipeline_summary.json").open("w", encoding="utf-8") as handle:
             json.dump(pipeline, handle, indent=2)
             handle.write("\n")
+    if args.eval_run_path_file is not None:
+        eval_run_path_file = Path(str(args.eval_run_path_file)).expanduser().resolve()
+        eval_run_path_file.parent.mkdir(parents=True, exist_ok=True)
+        eval_run_path_file.write_text(f"{eval_run}\n", encoding="utf-8")
     print(f"Patch assignments: {assignments_csv}")
     print(f"Patch assignments by patch: {patch_assignments_csv}")
     print(f"Patch PPO-format evaluation: {eval_run}")

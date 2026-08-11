@@ -216,6 +216,26 @@ sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR",DEBUG_UI=streamlit,RUN_
 
 The job prints a LAN URL and an SSH tunnel command. If direct LAN access is blocked, use the printed SSH tunnel and open `http://localhost:<port>`.
 
+### Publish the latest patch evaluation to GitHub Pages
+
+`main` keeps only source code. Generated frontend files and `runs/` remain ignored. The publisher builds the React app, copies one completed evaluation's `patch_debug/`, creates a fresh root commit in a temporary repository, and force-pushes only that snapshot to `gh-pages`. The reachable `gh-pages` history therefore contains one commit and one evaluation.
+
+The overfit patch evaluation job publishes its exact output after a successful run by default:
+
+```bash
+sbatch jobs/evaluation/run_evaluate_patch_overfit4.sbatch
+```
+
+Disable publication for a private or provisional run with `PUBLISH_GITHUB_PAGES=false`. To republish an existing evaluation manually:
+
+```bash
+python scripts/publish_patch_debug_pages.py \
+  --eval-run-dir runs/human_colorectal_patch_overfit4_eval_YYYYMMDDTHHMMSSZ \
+  --push
+```
+
+Before the first publication, configure the repository's Pages source as `gh-pages` at `/ (root)` and make sure the batch environment can authenticate `git push` to `origin`. The deployed project URL is `https://haoyunLi.github.io/RL/`.
+
 ## 12) Run Bin2Cell / SMURF / STCS baselines with PPO-aligned nuclei
 These method jobs are configured to use the same PPO-aligned nuclear bins instead of each tool's independent nuclear segmentation whenever possible. This keeps method comparison on the same nuclear seed level.
 

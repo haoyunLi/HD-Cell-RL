@@ -2,7 +2,7 @@ import type { PatchManifest, PatchManifestEntry, PatchPayload } from "./types";
 
 export function manifestUrlFromLocation(): string {
   const params = new URLSearchParams(window.location.search);
-  return params.get("manifest") ?? "/patch_debug/manifest.json";
+  return params.get("manifest") ?? new URL("patch_debug/manifest.json", document.baseURI).toString();
 }
 
 export async function loadManifest(url: string): Promise<PatchManifest> {

@@ -40,6 +40,8 @@ Submit jobs from the repository root. Scheduler stdout and stderr are written to
 - `run_method_ppo_eval_only.sbatch`
 - `run_multicell_greedy_eval.sbatch`
 
+`run_evaluate_patch_overfit4.sbatch` publishes its completed `patch_debug/` bundle to the single-commit `gh-pages` branch by default. Set `PUBLISH_GITHUB_PAGES=false` to keep a run local.
+
 ## Baselines
 
 `jobs/baselines/` contains Bin2Cell, SMURF, and STCS setup/run launchers.

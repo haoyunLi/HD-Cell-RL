@@ -51,6 +51,8 @@ GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_col
 GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
 GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
 EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
+PUBLISH_GITHUB_PAGES="${PUBLISH_GITHUB_PAGES:-true}"
+PAGES_REMOTE="${PAGES_REMOTE:-origin}"
 
 if [[ -z "$CHECKPOINT_PATH" ]]; then
   echo "CHECKPOINT_PATH is required." >&2
@@ -80,6 +82,7 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 EVAL_BASE_CONFIG="${EVAL_BASE_CONFIG:-$OUTPUT_DIR/base_config_eval_${SLURM_JOB_ID:-manual}.yaml}"
+EVAL_RUN_PATH_FILE="${EVAL_RUN_PATH_FILE:-$OUTPUT_DIR/eval_run_${SLURM_JOB_ID:-manual}.txt}"
 
 python - "$BASE_CONFIG" "$EVAL_BASE_CONFIG" "$EPISODES_INDEX_PATH" <<'PY'
 import sys
@@ -104,6 +107,7 @@ echo "POLICY_MODE: $POLICY_MODE"
 echo "RUN_DEVICE: $RUN_DEVICE"
 echo "ROLLOUT_DEVICES: $ROLLOUT_DEVICES"
 echo "ROLLOUT_BACKEND: $ROLLOUT_BACKEND"
+echo "PUBLISH_GITHUB_PAGES: $PUBLISH_GITHUB_PAGES"
 
 python scripts/evaluate_patch_checkpoint.py \
   --checkpoint "$CHECKPOINT_PATH" \
@@ -117,6 +121,7 @@ python scripts/evaluate_patch_checkpoint.py \
   --device "$RUN_DEVICE" \
   --rollout-devices "$ROLLOUT_DEVICES" \
   --rollout-backend "$ROLLOUT_BACKEND" \
+  --eval-run-path-file "$EVAL_RUN_PATH_FILE" \
   --eval-mode random_patches \
   --max-eval-patches 4 \
   --overlay_max_cells "$OVERLAY_MAX_CELLS" \
@@ -127,5 +132,34 @@ python scripts/evaluate_patch_checkpoint.py \
   --gt_nuclear_bins_path "$GT_NUCLEAR_BINS_PATH" \
   --gt_cell_assignments_csv "$GT_CELL_ASSIGNMENTS_CSV" \
   --gt_sc_expression_h5 "$GT_SC_EXPRESSION_H5"
+
+case "${PUBLISH_GITHUB_PAGES,,}" in
+  1|true|yes)
+    if [[ ! -s "$EVAL_RUN_PATH_FILE" ]]; then
+      echo "Completed evaluation path was not written: $EVAL_RUN_PATH_FILE" >&2
+      exit 1
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+      if [[ ! -s "$HOME/.nvm/nvm.sh" ]]; then
+        echo "npm is required to publish the patch debugger." >&2
+        exit 1
+      fi
+      set +u
+      source "$HOME/.nvm/nvm.sh"
+      set -u
+    fi
+    python scripts/publish_patch_debug_pages.py \
+      --eval-run-dir "$(<"$EVAL_RUN_PATH_FILE")" \
+      --remote "$PAGES_REMOTE" \
+      --push
+    ;;
+  0|false|no)
+    echo "GitHub Pages publication disabled."
+    ;;
+  *)
+    echo "PUBLISH_GITHUB_PAGES must be true or false: $PUBLISH_GITHUB_PAGES" >&2
+    exit 1
+    ;;
+esac
 
 conda deactivate
