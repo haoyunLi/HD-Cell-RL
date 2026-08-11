@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 import yaml
 
+from hd_cell_rl import grpo_objective as _grpo_objective
 from hd_cell_rl.ppo_feature_schema import (
     ACTION_FEATURE_DIM,
     A_CANDIDATE_COMPACTNESS_GAIN,
@@ -25,12 +26,15 @@ from hd_cell_rl.ppo_training import (
     EpisodeTrajectory,
     PlannerStep,
     PLANNER_MODE_COMPACT,
+    PLANNER_MODE_STOP,
     _build_policy_observation_from_state,
     _build_planner_rollout_buffer,
     _build_rollout_buffer,
+    _build_rollout_feature_cache,
     _compute_full_grpo_episode_scores,
     _compute_group_relative_episode_advantages,
     _compute_state_feature_bundle,
+    _full_grpo_evidence_state,
     _full_grpo_frontier_quality,
     _full_grpo_key_node_score,
     _full_grpo_stop_score,
@@ -139,9 +143,127 @@ class PPOTrainingTests(unittest.TestCase):
             atol=1e-6,
         )
 
+    def test_rollout_feature_cache_reuses_saved_state_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = load_ppo_training_config(
+                self._write_minimal_config(Path(tmp_dir), batch_cells=2, group_relative_enabled=True)
+            )
+            ctx = self._minimal_episode_context(config)
+
+        summary = {
+            "assigned_frac": 0.123,
+            "step_frac": 0.234,
+            "remaining_frac": 0.345,
+            "grow_ratio_scaled": 0.456,
+            "positive_frontier_fraction": 0.567,
+            "centroid_drift_scaled": 0.111,
+            "compactness_proxy": 0.222,
+            "assigned_ll_mean": 0.333,
+            "assigned_ll_max": 0.444,
+            "frontier_add_reward_topk_mean": 0.555,
+            "frontier_add_reward_mean": 0.666,
+            "frontier_add_reward_std": 0.777,
+            "frontier_add_reward_max": 0.888,
+        }
+        step = EpisodeStep(
+            packed_membership_mask=np.packbits(np.asarray([1, 0], dtype=np.uint8), bitorder="little"),
+            step_index=0,
+            action=1,
+            reward=1.0,
+            done=True,
+            old_log_prob=-0.5,
+            old_value=0.0,
+            state_summary=summary,
+        )
+        transitions = _build_rollout_buffer(
+            trajectories=[EpisodeTrajectory(episode_slot=0, steps=(step,), total_reward=1.0)],
+            gamma=0.99,
+            gae_lambda=0.95,
+            normalize_returns_per_episode=False,
+            normalize_advantages=False,
+            group_relative_enabled=False,
+            group_relative_group_size=2,
+            group_relative_mix_alpha=0.0,
+            group_relative_norm_epsilon=1.0e-6,
+            group_relative_score="episode_total_reward",
+        )
+        cache = _build_rollout_feature_cache(transitions=transitions, episode_contexts=[ctx])
+
+        self.assertAlmostEqual(float(cache.assigned_frac[0]), summary["assigned_frac"], places=6)
+        self.assertAlmostEqual(float(cache.frontier_add_reward_max[0]), summary["frontier_add_reward_max"], places=6)
+
     def test_load_config_rejects_invalid_group_relative_batch_divisibility(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = self._write_minimal_config(Path(tmp_dir), batch_cells=3, group_relative_enabled=True)
+            with self.assertRaises(ConfigError):
+                load_ppo_training_config(config_path)
+
+    def test_load_config_allows_disabled_distance_overlap_penalties(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = self._write_minimal_config(Path(tmp_dir), batch_cells=2, group_relative_enabled=True)
+            with config_path.open("r", encoding="utf-8") as handle:
+                config_data = yaml.safe_load(handle)
+            config_data["reward"]["w2"] = 0.0
+            config_data["reward"]["w3"] = 0.0
+            with config_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
+
+            config = load_ppo_training_config(config_path)
+
+        self.assertEqual(float(config.w2), 0.0)
+        self.assertEqual(float(config.w3), 0.0)
+
+    def test_load_config_parses_competition_margin_defaults_and_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            default_path = self._write_minimal_config(root, batch_cells=2, group_relative_enabled=True)
+            default_config = load_ppo_training_config(default_path)
+
+            custom_path = self._write_minimal_config(root, batch_cells=2, group_relative_enabled=True)
+            with custom_path.open("r", encoding="utf-8") as handle:
+                config_data = yaml.safe_load(handle)
+            config_data["reward"]["competition_margin_weight"] = 0.25
+            config_data["reward"]["competition_margin_radius_um"] = 20.0
+            config_data["reward"]["competition_margin_clip"] = 2.0
+            config_data["reward"]["competition_margin_affects_stop"] = False
+            with custom_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
+            custom_config = load_ppo_training_config(custom_path)
+
+        self.assertEqual(float(default_config.competition_margin_weight), 0.0)
+        self.assertEqual(float(default_config.competition_margin_radius_um), 20.0)
+        self.assertEqual(float(default_config.competition_margin_clip), 5.0)
+        self.assertIs(default_config.competition_margin_affects_stop, True)
+        self.assertEqual(default_config.to_serializable_dict()["reward"]["competition_margin_weight"], 0.0)
+        self.assertEqual(default_config.to_serializable_dict()["reward"]["competition_margin_clip"], 5.0)
+        self.assertEqual(default_config.to_serializable_dict()["reward"]["competition_margin_affects_stop"], True)
+        self.assertAlmostEqual(float(custom_config.competition_margin_weight), 0.25)
+        self.assertAlmostEqual(float(custom_config.competition_margin_radius_um), 20.0)
+        self.assertAlmostEqual(float(custom_config.competition_margin_clip), 2.0)
+        self.assertIs(custom_config.competition_margin_affects_stop, False)
+
+    def test_load_config_rejects_invalid_competition_margin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = self._write_minimal_config(Path(tmp_dir), batch_cells=2, group_relative_enabled=True)
+            with config_path.open("r", encoding="utf-8") as handle:
+                config_data = yaml.safe_load(handle)
+            config_data["reward"]["competition_margin_weight"] = -0.1
+            with config_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
+            with self.assertRaises(ConfigError):
+                load_ppo_training_config(config_path)
+
+            config_data["reward"]["competition_margin_weight"] = 0.1
+            config_data["reward"]["competition_margin_radius_um"] = 0.0
+            with config_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
+            with self.assertRaises(ConfigError):
+                load_ppo_training_config(config_path)
+
+            config_data["reward"]["competition_margin_radius_um"] = 20.0
+            config_data["reward"]["competition_margin_clip"] = 0.0
+            with config_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
             with self.assertRaises(ConfigError):
                 load_ppo_training_config(config_path)
 
@@ -171,6 +293,113 @@ class PPOTrainingTests(unittest.TestCase):
 
         self.assertGreater(stop_low, keep_low)
         self.assertLess(stop_high, keep_high)
+
+    def test_full_grpo_shape_cot_weight_defaults_zero_and_serializes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            default_config = load_ppo_training_config(
+                self._write_minimal_config(
+                    root,
+                    batch_cells=2,
+                    group_relative_enabled=True,
+                    training_mode="full_grpo",
+                )
+            )
+            custom_config = load_ppo_training_config(
+                self._write_minimal_config(
+                    root,
+                    batch_cells=2,
+                    group_relative_enabled=True,
+                    training_mode="full_grpo",
+                    shape_cot_weight=0.25,
+                )
+            )
+
+        self.assertEqual(default_config.full_grpo_shape_cot_weight, 0.0)
+        self.assertEqual(default_config.to_serializable_dict()["full_grpo"]["shape_cot_weight"], 0.0)
+        self.assertAlmostEqual(custom_config.full_grpo_shape_cot_weight, 0.25)
+        self.assertAlmostEqual(custom_config.to_serializable_dict()["full_grpo"]["shape_cot_weight"], 0.25)
+
+    def test_full_grpo_evidence_state_exposes_shape_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = load_ppo_training_config(
+                self._write_minimal_config(
+                    Path(tmp_dir),
+                    batch_cells=2,
+                    group_relative_enabled=True,
+                    training_mode="full_grpo",
+                )
+            )
+            ctx = self._minimal_episode_context(config)
+
+        evidence = _full_grpo_evidence_state(
+            ctx=ctx,
+            membership_mask=np.asarray([1, 0], dtype=np.uint8),
+            config=config,
+        )
+
+        self.assertIn("frontier_shape_topk_mean", evidence)
+        self.assertIn("frontier_shape_max", evidence)
+        self.assertIn("frontier_shape_mean", evidence)
+        self.assertIn("frontier_shape_positive_fraction", evidence)
+        self.assertIn("shape_quality", evidence)
+        self.assertEqual(evidence["shape_quality"], 0.0)
+
+    def test_shape_cot_evidence_changes_planner_node_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = load_ppo_training_config(
+                self._write_minimal_config(
+                    Path(tmp_dir),
+                    batch_cells=2,
+                    group_relative_enabled=True,
+                    training_mode="full_grpo",
+                    planner_enabled=True,
+                    shape_cot_weight=0.25,
+                )
+            )
+            ctx = self._minimal_episode_context(config)
+
+        packed = np.packbits(np.asarray([1, 0], dtype=np.uint8), bitorder="little")
+        compact_step = PlannerStep(
+            packed_membership_mask=packed,
+            step_index=0,
+            mode=PLANNER_MODE_COMPACT,
+            old_log_prob=-0.7,
+            compact_streak=0,
+        )
+        stop_step = PlannerStep(
+            packed_membership_mask=packed,
+            step_index=0,
+            mode=PLANNER_MODE_STOP,
+            old_log_prob=-0.7,
+            compact_streak=0,
+        )
+
+        def evidence_with_shape(shape_quality: float):
+            return {
+                "frontier_quality": 0.4,
+                "overgrowth_risk": 0.2,
+                "compactness": 0.5,
+                "centroid_drift": 0.1,
+                "frontier_add_reward_max": 0.3,
+                "frontier_add_reward_mean": 0.1,
+                "frontier_add_reward_topk_mean": 0.2,
+                "frontier_neighbor_support_topk_mean": 0.75,
+                "shape_quality": shape_quality,
+            }
+
+        def score_for(step: PlannerStep, shape_quality: float) -> float:
+            return _grpo_objective._full_grpo_key_node_score(
+                ctx=ctx,
+                planner_step=step,
+                config=config,
+                unpack_mask_fn=lambda *_args, **_kwargs: np.asarray([1, 0], dtype=np.uint8),
+                evidence_state_fn=lambda **_kwargs: evidence_with_shape(shape_quality),
+                compact_streak_scale_fn=lambda _streak: 0.0,
+            )
+
+        self.assertGreater(score_for(compact_step, 1.0), score_for(compact_step, -1.0))
+        self.assertGreater(score_for(stop_step, -1.0), score_for(stop_step, 1.0))
 
     def test_full_grpo_key_node_score_penalizes_repeated_compact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -485,6 +714,7 @@ class PPOTrainingTests(unittest.TestCase):
         group_relative_enabled: bool,
         training_mode: str = "ppo",
         planner_enabled: bool = False,
+        shape_cot_weight: float | None = None,
     ) -> Path:
         episodes_dir = root / "episodes"
         episodes_dir.mkdir(parents=True, exist_ok=True)
@@ -621,6 +851,8 @@ class PPOTrainingTests(unittest.TestCase):
                 "patience": 1,
             },
         }
+        if shape_cot_weight is not None:
+            config["full_grpo"]["shape_cot_weight"] = shape_cot_weight
         config_path = root / "ppo_training.yaml"
         with config_path.open("w", encoding="utf-8") as handle:
             yaml.safe_dump(config, handle, sort_keys=False)

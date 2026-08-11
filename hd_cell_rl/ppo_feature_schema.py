@@ -53,6 +53,7 @@ ACTION_FEATURE_NAMES: tuple[str, ...] = (
     "candidate_to_current_centroid_distance",
     "candidate_compactness_gain",
     "candidate_neighbor_support",
+    "competition_margin_scaled",
 )
 ACTION_FEATURE_INDEX: dict[str, int] = {name: i for i, name in enumerate(ACTION_FEATURE_NAMES)}
 ACTION_FEATURE_DIM = len(ACTION_FEATURE_NAMES)
@@ -71,6 +72,7 @@ A_FEATURE_10 = ACTION_FEATURE_INDEX["feature_10"]
 A_CANDIDATE_CENTROID_DISTANCE = ACTION_FEATURE_INDEX["candidate_to_current_centroid_distance"]
 A_CANDIDATE_COMPACTNESS_GAIN = ACTION_FEATURE_INDEX["candidate_compactness_gain"]
 A_CANDIDATE_NEIGHBOR_SUPPORT = ACTION_FEATURE_INDEX["candidate_neighbor_support"]
+A_COMPETITION_MARGIN = ACTION_FEATURE_INDEX["competition_margin_scaled"]
 
 STOP_ACTION_FEATURE_LABELS: tuple[str, ...] = (
     "is_stop_action",
@@ -87,6 +89,7 @@ STOP_ACTION_FEATURE_LABELS: tuple[str, ...] = (
     "candidate_to_current_centroid_distance_or_zero",
     "candidate_compactness_gain_or_zero",
     "candidate_neighbor_support_or_zero",
+    "competition_margin_scaled_or_zero",
 )
 
 ADD_ACTION_FEATURE_LABELS: tuple[str, ...] = (
@@ -104,4 +107,5 @@ ADD_ACTION_FEATURE_LABELS: tuple[str, ...] = (
     "candidate_to_current_centroid_distance",
     "candidate_compactness_gain",
     "candidate_neighbor_support",
+    "competition_margin_scaled",
 )

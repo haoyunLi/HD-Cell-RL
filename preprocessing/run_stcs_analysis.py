@@ -299,7 +299,7 @@ def _build_stcs_object(*, stcs_repo_dir: Path, adata: Any, pseudo_hd_dir: Path, 
     stcs_module_dir = stcs_repo_dir / "STCS"
     if not (stcs_module_dir / "STCS_main.py").exists():
         raise FileNotFoundError(
-            f"STCS_main.py not found under {stcs_module_dir}. Run jobs/setup_stcs_env.sbatch first "
+            f"STCS_main.py not found under {stcs_module_dir}. Run jobs/baselines/setup_stcs_env.sbatch first "
             "or set --stcs_repo_dir to a cloned YangLabRutgers/STCS repo."
         )
     if str(stcs_module_dir) not in sys.path:

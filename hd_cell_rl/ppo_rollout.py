@@ -51,6 +51,11 @@ from .ppo_state import (
 EnvFactory = Callable[[EpisodeContext], Any]
 
 
+def _state_summary_from_observation(obs: dict[str, Any]) -> dict[str, float] | None:
+    summary = obs.get("state_summary")
+    return None if summary is None else dict(summary)
+
+
 def run_episode(
     env: Any,
     model: ActorCritic,
@@ -96,6 +101,7 @@ def run_episode(
                 done=done,
                 old_log_prob=old_log_prob,
                 old_value=old_value,
+                state_summary=_state_summary_from_observation(obs),
             )
         )
         obs = next_obs
@@ -145,6 +151,7 @@ def _run_episode_with_planner(
                     mode=int(current_mode),
                     old_log_prob=planner_log_prob,
                     compact_streak=int(current_compact_streak),
+                    state_summary=_state_summary_from_observation(obs),
                 )
             )
             current_compact_streak = current_compact_streak + 1 if current_mode == PLANNER_MODE_COMPACT else 0
@@ -167,6 +174,7 @@ def _run_episode_with_planner(
                     planner_mode=int(current_mode),
                     compact_streak=int(current_compact_streak),
                     low_level_train=False,
+                    state_summary=_state_summary_from_observation(obs),
                 )
             )
             obs = next_obs
@@ -210,6 +218,7 @@ def _run_episode_with_planner(
                 planner_mode=int(current_mode),
                 compact_streak=int(current_compact_streak),
                 low_level_train=True,
+                state_summary=_state_summary_from_observation(obs),
             )
         )
         obs = next_obs
@@ -443,6 +452,7 @@ def _collect_trajectories_vectorized(
                     done=done,
                     old_log_prob=old_log_prob,
                     old_value=old_value,
+                    state_summary=_state_summary_from_observation(obs),
                 )
             )
             observations[slot] = next_obs
@@ -525,6 +535,7 @@ def _collect_trajectories_vectorized_planner(
                         mode=mode,
                         old_log_prob=float(planner_log_probs[local_idx]),
                         compact_streak=int(compact_streaks[slot]),
+                        state_summary=_state_summary_from_observation(obs),
                     )
                 )
                 compact_streaks[slot] = (
@@ -554,6 +565,7 @@ def _collect_trajectories_vectorized_planner(
                         planner_mode=int(current_modes[slot]),
                         compact_streak=int(compact_streaks[slot]),
                         low_level_train=False,
+                        state_summary=_state_summary_from_observation(obs),
                     )
                 )
                 observations[slot] = next_obs
@@ -604,6 +616,7 @@ def _collect_trajectories_vectorized_planner(
                         planner_mode=int(current_modes[slot]),
                         compact_streak=int(compact_streaks[slot]),
                         low_level_train=True,
+                        state_summary=_state_summary_from_observation(obs),
                     )
                 )
                 observations[slot] = next_obs

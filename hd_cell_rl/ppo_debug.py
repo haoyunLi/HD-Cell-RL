@@ -12,7 +12,14 @@ import numpy as np
 import pandas as pd
 import torch
 
-from hd_cell_rl.ppo_checkpoint import load_actor_critic_checkpoint
+from hd_cell_rl.patch_dataset import PatchDataset
+from hd_cell_rl.patch_env_cpu import CachedMultiCellPatchEnv, MultiCellPatchEnv
+from hd_cell_rl.patch_types import PatchContext, PatchTrainingSettings
+from hd_cell_rl.ppo_checkpoint import (
+    build_actor_critic_from_config,
+    load_actor_critic_checkpoint,
+    load_checkpoint_payload,
+)
 from hd_cell_rl.ppo_model import ActorCritic
 from hd_cell_rl.ppo_training import (
     AddStopCellEnv,
@@ -21,22 +28,27 @@ from hd_cell_rl.ppo_training import (
     PPOTrainingConfig,
     _add_rewards_from_membership_mask,
     _compute_dynamic_add_action_features,
+    _compute_seed_shape_features,
+    _compute_state_feature_bundle,
     _compute_state_summary_from_mask,
     _expression_reward_terms_per_bin,
+    _shape_reward_terms_per_bin,
     _normalize_cell_id,
     _observation_to_tensors,
     _posterior_from_membership_mask,
     _resolve_device,
+    _state_summary_from_bundle,
     _load_table,
     load_ppo_training_config,
 )
 from hd_cell_rl.ppo_feature_schema import (
     ADD_ACTION_FEATURE_LABELS,
+    ACTION_FEATURE_DIM,
     ACTION_FEATURE_NAMES,
     GLOBAL_FEATURE_NAMES,
     STOP_ACTION_FEATURE_LABELS,
 )
-from hd_cell_rl.reward_grid_search import (
+from hd_cell_rl.episode_artifacts import (
     _load_legacy_episode_artifact_payload,
     _load_sharded_episode_artifact_payload,
     _parse_episode_artifact_locator,
@@ -49,6 +61,20 @@ from hd_cell_rl.reward import (
 
 
 @dataclass(frozen=True)
+class PatchDebugPipeline:
+    """Resolved patch-evaluation metadata needed to replay patch rollouts."""
+
+    pipeline_dir: Path
+    checkpoint_path: Path
+    base_config_path: Path
+    patches_index_path: Path
+    assignments_csv: Path
+    merge_candidates_csv: Path
+    rollout_backend: str
+    policy_mode: str
+
+
+@dataclass(frozen=True)
 class PPODebugSummary:
     """Resolved run metadata loaded from a PPO evaluation directory."""
 
@@ -57,6 +83,7 @@ class PPODebugSummary:
     config_path: Path
     summary: dict[str, Any]
     step_traces_dir: Path | None = None
+    patch_pipeline: PatchDebugPipeline | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +139,98 @@ class EpisodeDebugTrace:
     step_trace_path: Path | None = None
 
 
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid JSON object in {path}")
+    return payload
+
+
+def _find_patch_pipeline_summary(*, run_dir: Path, summary: dict[str, Any]) -> Path | None:
+    direct = run_dir / "patch_eval_pipeline_summary.json"
+    if direct.exists():
+        return direct
+
+    source_dir_raw = summary.get("source_ppo_eval_run_dir")
+    if source_dir_raw:
+        source_dir = Path(str(source_dir_raw)).expanduser().resolve()
+        candidate = source_dir.parent / "patch_eval_pipeline_summary.json"
+        if candidate.exists():
+            return candidate
+
+    assignments_raw = summary.get("patch_rl_assignments_path")
+    if assignments_raw:
+        candidate = Path(str(assignments_raw)).expanduser().resolve().parent / "patch_eval_pipeline_summary.json"
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _load_patch_debug_pipeline(*, run_dir: Path, summary: dict[str, Any]) -> PatchDebugPipeline | None:
+    if str(summary.get("method", "")).strip().lower() != "patch_rl" and "patch_rl_assignments_path" not in summary:
+        return None
+
+    pipeline_path = _find_patch_pipeline_summary(run_dir=run_dir, summary=summary)
+    if pipeline_path is None:
+        raise FileNotFoundError(
+            "patch RL eval detected, but patch_eval_pipeline_summary.json could not be found "
+            "next to the patch intermediate outputs"
+        )
+    pipeline = _read_json_dict(pipeline_path)
+    required = ("checkpoint", "base_config", "patches_index_path", "assignments_csv", "merge_candidates_csv")
+    missing = [key for key in required if not pipeline.get(key)]
+    if missing:
+        raise ValueError(f"patch eval pipeline summary missing required keys: {missing}")
+
+    return PatchDebugPipeline(
+        pipeline_dir=pipeline_path.parent,
+        checkpoint_path=Path(str(pipeline["checkpoint"])).expanduser().resolve(),
+        base_config_path=Path(str(pipeline["base_config"])).expanduser().resolve(),
+        patches_index_path=Path(str(pipeline["patches_index_path"])).expanduser().resolve(),
+        assignments_csv=Path(str(pipeline["assignments_csv"])).expanduser().resolve(),
+        merge_candidates_csv=Path(str(pipeline["merge_candidates_csv"])).expanduser().resolve(),
+        rollout_backend=str(pipeline.get("rollout_backend", "cached_cpu")),
+        policy_mode=str(pipeline.get("policy_mode", "greedy")),
+    )
+
+
+def _load_debug_actor_critic_checkpoint(
+    checkpoint_path: Path,
+    config: PPOTrainingConfig,
+    *,
+    device: torch.device,
+) -> tuple[ActorCritic, dict[str, Any]]:
+    try:
+        return load_actor_critic_checkpoint(checkpoint_path, config, device=device)
+    except RuntimeError:
+        payload = load_checkpoint_payload(checkpoint_path)
+        state_dict = dict(payload.get("model_state_dict") or {})
+        model = build_actor_critic_from_config(config, device=device)
+        current = model.state_dict()
+        key = "action_encoder.0.weight"
+        old_weight = state_dict.get(key)
+        new_weight = current.get(key)
+        can_pad_action_features = (
+            isinstance(old_weight, torch.Tensor)
+            and isinstance(new_weight, torch.Tensor)
+            and old_weight.ndim == 2
+            and new_weight.ndim == 2
+            and old_weight.shape[0] == new_weight.shape[0]
+            and old_weight.shape[1] < new_weight.shape[1]
+        )
+        if not can_pad_action_features:
+            raise
+        padded = new_weight.detach().clone()
+        padded[:, : old_weight.shape[1]] = old_weight.to(dtype=padded.dtype)
+        padded[:, old_weight.shape[1] :] = 0.0
+        state_dict[key] = padded
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
+        return model, payload
+
+
 def _load_debug_summary(
     *,
     ppo_eval_run_dir: Path,
@@ -125,14 +244,14 @@ def _load_debug_summary(
     if not config_path.exists():
         raise FileNotFoundError(f"PPO eval config_used.yaml not found: {config_path}")
 
-    with summary_path.open("r", encoding="utf-8") as handle:
-        summary = json.load(handle)
-    if not isinstance(summary, dict):
-        raise ValueError(f"invalid summary JSON in {summary_path}")
+    summary = _read_json_dict(summary_path)
+    patch_pipeline = _load_patch_debug_pipeline(run_dir=run_dir, summary=summary)
 
     resolved_checkpoint: Path | None = None
     if checkpoint_path is not None:
         resolved_checkpoint = Path(checkpoint_path).expanduser().resolve()
+    elif patch_pipeline is not None:
+        resolved_checkpoint = patch_pipeline.checkpoint_path
     else:
         summary_ckpt = summary.get("checkpoint_path")
         if summary_ckpt:
@@ -143,6 +262,16 @@ def _load_debug_summary(
         )
     if not resolved_checkpoint.exists():
         raise FileNotFoundError(f"checkpoint not found: {resolved_checkpoint}")
+    if patch_pipeline is not None:
+        for path in (
+            patch_pipeline.base_config_path,
+            patch_pipeline.patches_index_path,
+            patch_pipeline.assignments_csv,
+            patch_pipeline.merge_candidates_csv,
+        ):
+            if not path.exists():
+                raise FileNotFoundError(f"patch debug input not found: {path}")
+        config_path = patch_pipeline.base_config_path
 
     step_traces_dir = None
     step_traces_dir_raw = summary.get("step_traces_dir")
@@ -152,7 +281,7 @@ def _load_debug_summary(
             step_traces_dir = step_traces_dir_candidate
 
     policy_mode = str(summary.get("policy_mode", ""))
-    if policy_mode and policy_mode != "greedy" and step_traces_dir is None:
+    if patch_pipeline is None and policy_mode and policy_mode != "greedy" and step_traces_dir is None:
         raise ValueError(
             "debug app needs saved step traces for non-greedy eval runs, but summary.json does not provide a valid step_traces_dir"
         )
@@ -163,6 +292,7 @@ def _load_debug_summary(
         config_path=config_path,
         summary=summary,
         step_traces_dir=step_traces_dir,
+        patch_pipeline=patch_pipeline,
     )
 
 
@@ -365,6 +495,35 @@ def build_gt_boundary_bin_centers(xy: np.ndarray) -> np.ndarray | None:
     return np.asarray(boundary_xy, dtype=np.float64)
 
 
+def _load_patch_rows_by_id(patches_index_path: Path) -> dict[str, Any]:
+    patches_df = pd.read_csv(patches_index_path)
+    if "patch_id" not in patches_df.columns:
+        raise ValueError(f"patches index missing patch_id column: {patches_index_path}")
+    return {str(row.patch_id): row for row in patches_df.itertuples(index=False)}
+
+
+def _load_patch_cell_maps(merge_candidates_csv: Path) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    df = pd.read_csv(merge_candidates_csv)
+    required = {"cell_id", "patch_id"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"patch merge candidates missing columns {missing}: {merge_candidates_csv}")
+    df = df.copy()
+    df["cell_id"] = df["cell_id"].map(_normalize_cell_id)
+    df = df.loc[df["cell_id"].notna()].copy()
+    if "merge_score" in df.columns:
+        df = df.sort_values("merge_score", ascending=False)
+    patch_by_cell: dict[str, str] = {}
+    row_by_cell: dict[str, dict[str, Any]] = {}
+    for row in df.itertuples(index=False):
+        cell_id = str(getattr(row, "cell_id"))
+        if cell_id in patch_by_cell:
+            continue
+        patch_by_cell[cell_id] = str(getattr(row, "patch_id"))
+        row_by_cell[cell_id] = row._asdict()
+    return patch_by_cell, row_by_cell
+
+
 class PPODebugSession:
     """Lazy-loaded state for interactive PPO inspection."""
 
@@ -374,11 +533,25 @@ class PPODebugSession:
         debug_summary: PPODebugSummary,
         config: PPOTrainingConfig,
         device: torch.device,
-        dataset: EpisodeDataset,
+        dataset: EpisodeDataset | None,
         model: ActorCritic,
         per_episode_df: pd.DataFrame,
         cell_to_artifact_path: dict[str, Path],
+        patch_dataset: PatchDataset | None = None,
+        patch_rows_by_id: dict[str, Any] | None = None,
+        patch_id_by_cell: dict[str, str] | None = None,
+        patch_merge_row_by_cell: dict[str, dict[str, Any]] | None = None,
     ) -> None:
+        if patch_merge_row_by_cell:
+            per_episode_df = per_episode_df.copy()
+            merge_rows = {str(cell_id): dict(row) for cell_id, row in patch_merge_row_by_cell.items()}
+            for column in ("patch_id", "merge_score", "patch_score"):
+                if column not in per_episode_df.columns:
+                    per_episode_df[column] = per_episode_df["cell_id"].astype(str).map(
+                        lambda cell_id, col=column: merge_rows.get(str(cell_id), {}).get(col, np.nan)
+                    )
+            if "total_reward" not in per_episode_df.columns and "patch_score" in per_episode_df.columns:
+                per_episode_df["total_reward"] = per_episode_df["patch_score"]
         self.debug_summary = debug_summary
         self.config = config
         self.device = device
@@ -391,13 +564,21 @@ class PPODebugSession:
         }
         self._cell_ids = tuple(self._cell_row_map.keys())
         self._cell_to_artifact_path = dict(cell_to_artifact_path)
+        self._patch_dataset = patch_dataset
+        self._patch_rows_by_id = dict(patch_rows_by_id or {})
+        self._patch_id_by_cell = dict(patch_id_by_cell or {})
+        self._patch_merge_row_by_cell = dict(patch_merge_row_by_cell or {})
+        self._patch_context_cache: dict[str, PatchContext] = {}
         self._trace_cache: dict[str, EpisodeDebugTrace] = {}
         self._gt_xy_cache: dict[str, np.ndarray | None] = {}
         self._candidate_expression_cache: dict[str, np.ndarray] = {}
-        self._reference_gene_names = _load_reference_gene_names(
-            config=self.config,
-            n_genes=int(getattr(self.dataset, "_reference_counts").shape[1]),
-        )
+        if self.dataset is not None:
+            self._reference_gene_names = _load_reference_gene_names(
+                config=self.config,
+                n_genes=int(getattr(self.dataset, "_reference_counts").shape[1]),
+            )
+        else:
+            self._reference_gene_names = tuple()
 
         gt_cell_bins_path = self.debug_summary.summary.get("gt_cell_bins_path")
         self.gt_cell_bins_path = None if not gt_cell_bins_path else Path(str(gt_cell_bins_path)).expanduser().resolve()
@@ -415,26 +596,69 @@ class PPODebugSession:
             checkpoint_path=checkpoint_path,
         )
         config = load_ppo_training_config(debug_summary.config_path)
+        if debug_summary.patch_pipeline is not None:
+            config = replace(config, planner_enabled=False)
         resolved_device = _resolve_device(str(device_name))
-        model, _ = load_actor_critic_checkpoint(
+        model, payload = _load_debug_actor_critic_checkpoint(
             debug_summary.checkpoint_path,
             config,
             device=resolved_device,
         )
 
-        rng = np.random.default_rng(int(config.seed or 0))
-        dataset = EpisodeDataset(config=config, rng=rng)
         per_episode_csv = debug_summary.eval_run_dir / "per_episode.csv"
         if not per_episode_csv.exists():
             raise FileNotFoundError(f"PPO eval per_episode.csv not found: {per_episode_csv}")
         per_episode_df = _normalize_eval_cell_ids(pd.read_csv(per_episode_csv))
 
-        cell_to_artifact_path = _build_cell_artifact_map(config.episodes_index_path)
-        missing = [cell_id for cell_id in per_episode_df["cell_id"].astype(str).tolist() if cell_id not in cell_to_artifact_path]
-        if missing:
-            raise KeyError(
-                f"{len(missing)} eval cells are missing from episodes_index.csv; first few: {missing[:5]}"
+        rng = np.random.default_rng(int(config.seed or 0))
+        dataset = None
+        cell_to_artifact_path: dict[str, Path] = {}
+        if config.episodes_index_path.exists():
+            dataset = EpisodeDataset(config=config, rng=rng)
+            cell_to_artifact_path = _build_cell_artifact_map(config.episodes_index_path)
+            missing = [
+                cell_id
+                for cell_id in per_episode_df["cell_id"].astype(str).tolist()
+                if cell_id not in cell_to_artifact_path
+            ]
+            if missing:
+                raise KeyError(
+                    f"{len(missing)} eval cells are missing from episodes_index.csv; first few: {missing[:5]}"
+                )
+        elif debug_summary.patch_pipeline is None:
+            raise FileNotFoundError(f"episodes index file not found: {config.episodes_index_path}")
+
+        patch_dataset = None
+        patch_rows_by_id = None
+        patch_id_by_cell = None
+        patch_merge_row_by_cell = None
+        if debug_summary.patch_pipeline is not None:
+            patch_rows_by_id = _load_patch_rows_by_id(debug_summary.patch_pipeline.patches_index_path)
+            patch_id_by_cell, patch_merge_row_by_cell = _load_patch_cell_maps(
+                debug_summary.patch_pipeline.merge_candidates_csv
             )
+
+        if debug_summary.patch_pipeline is not None and dataset is not None:
+            patch_cfg = dict(payload.get("patch_config") or {})
+            patch_training_cfg = dict(patch_cfg.get("patch_training") or {})
+            patch_settings = PatchTrainingSettings(
+                patches_index_path=debug_summary.patch_pipeline.patches_index_path,
+                batch_patches=1,
+                max_steps_per_patch=int(patch_training_cfg.get("max_steps_per_patch", 1000)),
+                margin_cells_compete=bool(patch_training_cfg.get("margin_cells_compete", True)),
+                use_core_cells_for_score=True,
+                score_normalization=str(patch_training_cfg.get("score_normalization", "mean_core_cells")),
+                rollout_backend=str(debug_summary.patch_pipeline.rollout_backend or "cached_cpu"),
+                cache_patch_contexts=True,
+                competition_margin_enabled=bool(patch_training_cfg.get("competition_margin_enabled", True)),
+                force_fill_expression_bins=bool(patch_training_cfg.get("force_fill_expression_bins", False)),
+                fill_target=str(patch_training_cfg.get("fill_target", "reachable_expression_bins")),
+                stop_action_mode=str(patch_training_cfg.get("stop_action_mode", "enabled")),
+                agent_mode=str(patch_training_cfg.get("agent_mode", "multi_cell")),
+                after_fill_actions=str(patch_training_cfg.get("after_fill_actions", "add_or_stop")),
+                global_delta_epsilon=float(patch_training_cfg.get("global_delta_epsilon", 1.0e-6)),
+            )
+            patch_dataset = PatchDataset(base_config=config, settings=patch_settings, rng=rng)
 
         return cls(
             debug_summary=debug_summary,
@@ -444,6 +668,10 @@ class PPODebugSession:
             model=model,
             per_episode_df=per_episode_df,
             cell_to_artifact_path=cell_to_artifact_path,
+            patch_dataset=patch_dataset,
+            patch_rows_by_id=patch_rows_by_id,
+            patch_id_by_cell=patch_id_by_cell,
+            patch_merge_row_by_cell=patch_merge_row_by_cell,
         )
 
     @property
@@ -451,7 +679,10 @@ class PPODebugSession:
         return self._cell_ids
 
     def close(self) -> None:
-        self.dataset.close()
+        if self.dataset is not None:
+            self.dataset.close()
+        if self._patch_dataset is not None:
+            self._patch_dataset.close()
 
     def get_episode_metrics(self, cell_id: str) -> dict[str, Any]:
         normalized = _normalize_cell_id(cell_id)
@@ -473,7 +704,10 @@ class PPODebugSession:
         if normalized is None or normalized not in self._cell_row_map:
             raise KeyError(f"cell_id not found in eval run: {cell_id}")
         if normalized not in self._trace_cache:
-            self._trace_cache[normalized] = self._build_trace(normalized)
+            if self.debug_summary.patch_pipeline is not None:
+                self._trace_cache[normalized] = self._build_patch_trace(normalized)
+            else:
+                self._trace_cache[normalized] = self._build_trace(normalized)
         return self._trace_cache[normalized]
 
     @property
@@ -647,6 +881,340 @@ class PPODebugSession:
             step_trace_path=saved_step_trace_path,
         )
 
+    def _load_patch_context_for_cell(self, cell_id: str) -> tuple[PatchContext, int, dict[str, Any]]:
+        if self._patch_dataset is None:
+            raise RuntimeError("patch debug session is missing PatchDataset")
+        patch_id = self._patch_id_by_cell.get(str(cell_id))
+        if patch_id is None:
+            raise KeyError(f"cell_id={cell_id} is not present in patch_rl_merge_candidates.csv")
+        if patch_id not in self._patch_context_cache:
+            row = self._patch_rows_by_id.get(str(patch_id))
+            if row is None:
+                raise KeyError(f"patch_id={patch_id} is missing from patches index")
+            context = self._patch_dataset.load_patch_context(row)
+            if context is None:
+                raise RuntimeError(f"failed to load patch context for patch_id={patch_id}")
+            self._patch_context_cache[patch_id] = context
+        context = self._patch_context_cache[patch_id]
+        for idx, ctx in enumerate(context.cells):
+            if str(ctx.cell_id) == str(cell_id):
+                return context, int(idx), dict(self._patch_merge_row_by_cell.get(str(cell_id), {}))
+        raise KeyError(f"cell_id={cell_id} is not loaded in patch context patch_id={patch_id}")
+
+    def _build_patch_debug_env(self, context: PatchContext) -> MultiCellPatchEnv:
+        backend = (
+            "cached_cpu"
+            if self.debug_summary.patch_pipeline is None
+            else str(self.debug_summary.patch_pipeline.rollout_backend).strip().lower()
+        )
+        if backend == "legacy_cpu":
+            return MultiCellPatchEnv(context)
+        return CachedMultiCellPatchEnv(context)
+
+    def _build_patch_trace(self, cell_id: str) -> EpisodeDebugTrace:
+        metrics = self.get_episode_metrics(cell_id)
+        context, target_cell_idx, merge_row = self._load_patch_context_for_cell(cell_id)
+        cell_context = context.cells[target_cell_idx]
+        merged_metrics = dict(metrics)
+        merged_metrics.update(
+            {
+                f"patch_{key}": value
+                for key, value in merge_row.items()
+                if key not in {"cell_id"}
+            }
+        )
+        if "total_reward" not in merged_metrics and "patch_score" in merge_row:
+            merged_metrics["total_reward"] = float(merge_row["patch_score"])
+
+        gt_xy = self.get_gt_cell_xy(metrics.get("matched_gt_cell_id"))
+        env = self._build_patch_debug_env(context)
+        obs, info = env.reset()
+
+        step_states: list[StepDebugState] = []
+        total_reward = 0.0
+        final_membership_mask = np.asarray(env.final_masks()[str(cell_context.cell_id)], dtype=np.uint8).copy()
+        final_assigned = int(np.sum(final_membership_mask))
+        rollout_backend = (
+            "cached_cpu"
+            if self.debug_summary.patch_pipeline is None
+            else str(self.debug_summary.patch_pipeline.rollout_backend)
+        )
+        replay_source = f"patch_{rollout_backend}_greedy_policy"
+
+        while True:
+            step_state, patch_action = self._build_patch_step_state(
+                context=context,
+                env=env,
+                obs=obs,
+                target_cell_idx=target_cell_idx,
+            )
+            next_obs, reward, terminated, truncated, info = env.step(patch_action)
+            total_reward += float(reward)
+            final_membership_mask = np.asarray(env.final_masks()[str(cell_context.cell_id)], dtype=np.uint8).copy()
+            final_assigned = int(np.sum(final_membership_mask))
+            step_state = replace(
+                step_state,
+                terminated_after_action=bool(terminated),
+                truncated_after_action=bool(truncated),
+                n_assigned_bins_after=int(final_assigned),
+            )
+            step_states.append(step_state)
+            obs = next_obs
+            if terminated or truncated:
+                break
+
+        n_assigned_eval = int(metrics.get("n_assigned_bins", -1))
+        replay_matches_eval = int(final_assigned) == n_assigned_eval if n_assigned_eval >= 0 else False
+
+        return EpisodeDebugTrace(
+            cell_id=cell_id,
+            episode_metrics=merged_metrics,
+            candidate_bin_ids=tuple(str(x) for x in cell_context.candidate_bin_ids),
+            candidate_bin_xy_um=np.asarray(cell_context.candidate_bin_xy_um, dtype=np.float32),
+            nucleus_center_xy_um=np.asarray(cell_context.nucleus_center_xy_um, dtype=np.float32),
+            gt_cell_xy_um=None if gt_xy is None else np.asarray(gt_xy, dtype=np.float32),
+            final_membership_mask=final_membership_mask,
+            step_states=tuple(step_states),
+            total_reward_replayed=float(total_reward),
+            n_steps_replayed=int(len(step_states)),
+            n_assigned_bins_replayed=int(final_assigned),
+            replay_matches_eval=bool(replay_matches_eval),
+            replay_source=replay_source,
+            step_trace_path=None,
+        )
+
+    def _build_patch_step_state(
+        self,
+        *,
+        context: PatchContext,
+        env: MultiCellPatchEnv,
+        obs: dict[str, Any],
+        target_cell_idx: int,
+    ) -> tuple[StepDebugState, int]:
+        cell_context = context.cells[int(target_cell_idx)]
+        membership_mask = np.asarray(env._membership_masks[int(target_cell_idx)], dtype=np.uint8).copy()
+        global_features = np.asarray(obs["global_features"], dtype=np.float32).copy()
+        patch_action_features = np.asarray(obs["action_features"], dtype=np.float32).copy()
+        patch_action_mask = np.asarray(obs["action_mask"], dtype=bool).copy()
+        step_index = int(obs["step_index"])
+
+        global_t, action_t, mask_t = _observation_to_tensors(obs, device=self.device)
+        with torch.inference_mode():
+            action_latent = self.model.encode_action_features(action_t)
+            raw_patch_logits = (
+                self.model.policy_logits_from_action_latent(action_latent).squeeze(0).detach().cpu().numpy()
+            )
+            dist, value = self.model(global_t, action_t, mask_t)
+            patch_probabilities = dist.probs.squeeze(0).detach().cpu().numpy()
+        raw_patch_logits = np.asarray(raw_patch_logits, dtype=np.float32)
+        patch_probabilities = np.asarray(patch_probabilities, dtype=np.float32)
+        patch_action = int(np.argmax(patch_probabilities))
+
+        n_bins = int(cell_context.n_bins)
+        local_action_features = np.zeros((n_bins + 1, ACTION_FEATURE_DIM), dtype=np.float32)
+        local_action_features[0] = patch_action_features[0]
+        local_action_mask = np.zeros((n_bins + 1,), dtype=bool)
+        local_action_mask[0] = bool(patch_action_mask[0])
+        local_logits = np.full((n_bins + 1,), -np.inf, dtype=np.float32)
+        local_probs = np.zeros((n_bins + 1,), dtype=np.float32)
+        local_logits[0] = raw_patch_logits[0]
+        local_probs[0] = patch_probabilities[0]
+        legal = np.zeros((n_bins,), dtype=bool)
+        mapped_rewards = np.zeros((n_bins,), dtype=np.float32)
+
+        chosen_action = 0
+        chosen_reward = float(env._stop_reward_value)
+        chosen_barcode: str | None = None
+        chosen_action_probability = float(patch_probabilities[patch_action])
+        chosen_action_logit = float(raw_patch_logits[patch_action])
+
+        for action_idx, (cell_idx, bin_idx, reward) in enumerate(env._cached_action_map, start=1):
+            if int(cell_idx) == int(target_cell_idx):
+                local_idx = int(bin_idx) + 1
+                local_action_features[local_idx] = patch_action_features[action_idx]
+                local_action_mask[local_idx] = bool(patch_action_mask[action_idx])
+                local_logits[local_idx] = raw_patch_logits[action_idx]
+                local_probs[local_idx] = patch_probabilities[action_idx]
+                legal[int(bin_idx)] = True
+                mapped_rewards[int(bin_idx)] = np.float32(reward)
+                if int(patch_action) == int(action_idx):
+                    chosen_action = local_idx
+                    chosen_reward = float(reward)
+                    chosen_barcode = str(cell_context.candidate_bin_ids[int(bin_idx)])
+            elif int(patch_action) == int(action_idx):
+                other_ctx = context.cells[int(cell_idx)]
+                chosen_reward = float(reward)
+                chosen_barcode = f"other_cell:{other_ctx.cell_id}:{other_ctx.candidate_bin_ids[int(bin_idx)]}"
+
+        posterior = _posterior_from_membership_mask(ctx=cell_context, membership_mask=membership_mask)
+        neighbor_support = compute_neighbor_support_fraction(membership_mask, cell_context.neighbor_index).astype(
+            np.float32,
+            copy=False,
+        )
+        r_expr_raw, expr_term, expr_old_raw, expr_old_term = _expression_reward_terms_per_bin(
+            ctx=cell_context,
+            membership_mask=membership_mask,
+            posterior=posterior,
+            frontier_mask=legal,
+        )
+        if bool(cell_context.normalize_expression_zscore) and np.any(legal):
+            expr_frontier = r_expr_raw[legal]
+            expr_frontier_mean = float(np.mean(expr_frontier))
+            expr_frontier_std = float(np.std(expr_frontier, ddof=0))
+        elif bool(cell_context.normalize_expression_zscore):
+            expr_frontier_mean = 0.0
+            expr_frontier_std = 0.0
+        else:
+            expr_frontier_mean = float(np.mean(r_expr_raw[legal])) if np.any(legal) else 0.0
+            expr_frontier_std = float(np.std(r_expr_raw[legal], ddof=0)) if np.any(legal) else 0.0
+
+        shape_raw, shape_term = _shape_reward_terms_per_bin(
+            ctx=cell_context,
+            membership_mask=membership_mask,
+            frontier_mask=legal,
+        )
+        expr_weighted = (float(cell_context.w1) * expr_term).astype(np.float32, copy=False)
+        expr_old_weighted = (float(cell_context.w5) * expr_old_term).astype(np.float32, copy=False)
+        shape_weighted = (float(cell_context.shape_prior_weight) * shape_term).astype(np.float32, copy=False)
+        distance_penalty = (float(cell_context.w2) * cell_context.p_dis).astype(np.float32, copy=False)
+        overlap_penalty = (float(cell_context.w3) * cell_context.p_overlap).astype(np.float32, copy=False)
+        base_penalty = cell_context.base_penalty.astype(np.float32, copy=False)
+        neighbor_bonus = (float(cell_context.w4) * neighbor_support).astype(np.float32, copy=False)
+        base_rewards = _add_rewards_from_membership_mask(
+            ctx=cell_context,
+            membership_mask=membership_mask,
+            posterior=posterior,
+            neighbor_support=neighbor_support,
+            frontier_mask=legal,
+        ).astype(np.float32, copy=False)
+        reward_total = base_rewards.copy()
+        reward_total[legal] = mapped_rewards[legal]
+        candidate_centroid_distance, candidate_compactness_gain = _compute_dynamic_add_action_features(
+            ctx=cell_context,
+            membership_mask=membership_mask,
+            frontier_mask=legal,
+        )
+        state_bundle = _compute_state_feature_bundle(
+            ctx=cell_context,
+            membership_mask=membership_mask,
+            step_index=step_index,
+            frontier_mask=legal,
+        )
+        state_summary = _state_summary_from_bundle(state_bundle)
+        if np.any(legal):
+            legal_rewards = reward_total[legal].astype(np.float64, copy=False)
+            state_summary.update(
+                {
+                    "positive_frontier_fraction": float(np.mean(legal_rewards > 0.0)),
+                    "frontier_add_reward_mean": float(np.mean(legal_rewards)),
+                    "frontier_add_reward_std": float(np.std(legal_rewards, ddof=0)),
+                    "frontier_add_reward_max": float(np.max(legal_rewards)),
+                    "frontier_add_reward_topk_mean": float(
+                        compute_stop_delta(
+                            reward_total,
+                            legal,
+                            stop_stat="topk_mean",
+                            stop_top_k=int(cell_context.stop_top_k),
+                        )
+                    ),
+                }
+            )
+        seed_compactness, seed_radius_p90_scaled, seed_aspect_ratio_scaled = _compute_seed_shape_features(cell_context)
+        state_summary.update(
+            {
+                "seed_compactness": float(seed_compactness),
+                "seed_radius_p90_scaled": float(seed_radius_p90_scaled),
+                "seed_aspect_ratio_scaled": float(seed_aspect_ratio_scaled),
+            }
+        )
+        stop_delta = float(
+            compute_stop_delta(
+                reward_total,
+                legal,
+                stop_stat=str(cell_context.stop_stat),
+                stop_top_k=int(cell_context.stop_top_k),
+            )
+        )
+        stop_reward = float(-float(cell_context.stop_lambda) * stop_delta)
+
+        reward_rank = np.full((n_bins,), np.nan, dtype=np.float32)
+        probability_rank = np.full((n_bins,), np.nan, dtype=np.float32)
+        if np.any(legal):
+            legal_indices = np.flatnonzero(legal)
+            reward_order = legal_indices[np.argsort(-reward_total[legal], kind="stable")]
+            probability_order = legal_indices[np.argsort(-local_probs[1:][legal], kind="stable")]
+            reward_rank[reward_order] = np.arange(1, reward_order.shape[0] + 1, dtype=np.float32)
+            probability_rank[probability_order] = np.arange(1, probability_order.shape[0] + 1, dtype=np.float32)
+
+        bin_xy = np.asarray(cell_context.candidate_bin_xy_um, dtype=np.float32)
+        bin_table = pd.DataFrame(
+            {
+                "bin_idx": np.arange(n_bins, dtype=np.int32),
+                "action_idx": np.arange(1, n_bins + 1, dtype=np.int32),
+                "barcode": np.asarray(cell_context.candidate_bin_ids, dtype=object),
+                "x_um": bin_xy[:, 0].astype(np.float32, copy=False),
+                "y_um": bin_xy[:, 1].astype(np.float32, copy=False),
+                "is_assigned": membership_mask.astype(bool, copy=False),
+                "is_frontier": legal.astype(bool, copy=False),
+                "policy_logit": local_logits[1:].astype(np.float32, copy=False),
+                "policy_probability": local_probs[1:].astype(np.float32, copy=False),
+                "reward_total": reward_total.astype(np.float32, copy=False),
+                "expr_raw": r_expr_raw.astype(np.float32, copy=False),
+                "expr_confidence": cell_context.expression_confidence.astype(np.float32, copy=False),
+                "expr_term": expr_term.astype(np.float32, copy=False),
+                "expr_weighted": expr_weighted.astype(np.float32, copy=False),
+                "expr_old_raw": expr_old_raw.astype(np.float32, copy=False),
+                "expr_old_term": expr_old_term.astype(np.float32, copy=False),
+                "expr_old_weighted": expr_old_weighted.astype(np.float32, copy=False),
+                "shape_raw": shape_raw.astype(np.float32, copy=False),
+                "shape_term": shape_term.astype(np.float32, copy=False),
+                "shape_weighted": shape_weighted.astype(np.float32, copy=False),
+                "distance_penalty": distance_penalty.astype(np.float32, copy=False),
+                "overlap_penalty": overlap_penalty.astype(np.float32, copy=False),
+                "base_penalty": base_penalty.astype(np.float32, copy=False),
+                "neighbor_support": neighbor_support.astype(np.float32, copy=False),
+                "neighbor_bonus": neighbor_bonus.astype(np.float32, copy=False),
+                "candidate_to_current_centroid_distance": candidate_centroid_distance.astype(np.float32, copy=False),
+                "candidate_compactness_gain": candidate_compactness_gain.astype(np.float32, copy=False),
+                "reward_rank": reward_rank.astype(np.float32, copy=False),
+                "probability_rank": probability_rank.astype(np.float32, copy=False),
+                "is_chosen_action": np.arange(1, n_bins + 1, dtype=np.int32) == int(chosen_action),
+            }
+        )
+
+        return (
+            StepDebugState(
+                cell_id=str(cell_context.cell_id),
+                step_index=int(step_index),
+                membership_mask=membership_mask,
+                frontier_mask=legal.astype(bool, copy=False),
+                action_mask=local_action_mask.astype(bool, copy=False),
+                global_features=global_features,
+                action_features=local_action_features,
+                posterior=np.asarray(posterior, dtype=np.float32),
+                value_estimate=float(value.item()),
+                raw_policy_logits=local_logits,
+                masked_action_probabilities=local_probs,
+                stop_delta=float(stop_delta),
+                stop_reward=float(stop_reward),
+                stop_probability=float(local_probs[0]),
+                stop_logit=float(local_logits[0]),
+                expr_frontier_mean=float(expr_frontier_mean),
+                expr_frontier_std=float(expr_frontier_std),
+                state_summary={str(k): float(v) for k, v in state_summary.items()},
+                chosen_action=int(chosen_action),
+                chosen_action_probability=float(chosen_action_probability),
+                chosen_action_logit=float(chosen_action_logit),
+                chosen_reward=float(chosen_reward),
+                chosen_barcode=chosen_barcode,
+                terminated_after_action=False,
+                truncated_after_action=False,
+                n_assigned_bins_after=int(np.sum(membership_mask)),
+                bin_table=bin_table,
+            ),
+            int(patch_action),
+        )
+
     def _build_step_state(
         self,
         *,
@@ -683,8 +1251,14 @@ class PPODebugSession:
             expr_frontier_mean = float(np.mean(r_expr_raw[frontier_mask])) if np.any(frontier_mask) else 0.0
             expr_frontier_std = float(np.std(r_expr_raw[frontier_mask], ddof=0)) if np.any(frontier_mask) else 0.0
 
+        shape_raw, shape_term = _shape_reward_terms_per_bin(
+            ctx=context,
+            membership_mask=membership_mask,
+            frontier_mask=frontier_mask,
+        )
         expr_weighted = (float(context.w1) * expr_term).astype(np.float32, copy=False)
         expr_old_weighted = (float(context.w5) * expr_old_term).astype(np.float32, copy=False)
+        shape_weighted = (float(context.shape_prior_weight) * shape_term).astype(np.float32, copy=False)
         distance_penalty = (float(context.w2) * context.p_dis).astype(np.float32, copy=False)
         overlap_penalty = (float(context.w3) * context.p_overlap).astype(np.float32, copy=False)
         base_penalty = context.base_penalty.astype(np.float32, copy=False)
@@ -705,6 +1279,14 @@ class PPODebugSession:
             ctx=context,
             membership_mask=membership_mask,
             step_index=step_index,
+        )
+        seed_compactness, seed_radius_p90_scaled, seed_aspect_ratio_scaled = _compute_seed_shape_features(context)
+        state_summary.update(
+            {
+                "seed_compactness": float(seed_compactness),
+                "seed_radius_p90_scaled": float(seed_radius_p90_scaled),
+                "seed_aspect_ratio_scaled": float(seed_aspect_ratio_scaled),
+            }
         )
         stop_delta = float(
             compute_stop_delta(
@@ -769,6 +1351,9 @@ class PPODebugSession:
                 "expr_old_raw": expr_old_raw.astype(np.float32, copy=False),
                 "expr_old_term": expr_old_term.astype(np.float32, copy=False),
                 "expr_old_weighted": expr_old_weighted.astype(np.float32, copy=False),
+                "shape_raw": shape_raw.astype(np.float32, copy=False),
+                "shape_term": shape_term.astype(np.float32, copy=False),
+                "shape_weighted": shape_weighted.astype(np.float32, copy=False),
                 "distance_penalty": distance_penalty.astype(np.float32, copy=False),
                 "overlap_penalty": overlap_penalty.astype(np.float32, copy=False),
                 "base_penalty": base_penalty.astype(np.float32, copy=False),

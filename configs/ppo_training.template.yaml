@@ -15,7 +15,7 @@ run:
   training_mode: ppo
 
 inputs:
-  # This is auto-updated by jobs/run_ppo_training_cpu.sbatch and jobs/run_ppo_training_gpu.sbatch.
+  # This is auto-updated by jobs/training/run_ppo_training_cpu.sbatch and jobs/training/run_ppo_training_gpu.sbatch.
   episodes_index_path: runs/example_episode_build_run/episodes_index.csv
   reference:
     path: workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz
@@ -32,6 +32,8 @@ inputs:
   # Optional override for matrix-column expression loader cache.
   # If null, value from episodes run config is reused.
   expression_cache_size: null
+  # Cache recently built episode contexts. Set 0 to disable.
+  episode_context_cache_size: 512
 
 ppo:
   gamma: 0.99
@@ -90,6 +92,16 @@ reward:
   expression_confidence_pseudocount: 5.0
   normalize_expression_zscore: true
   zscore_delta: 1.0e-8
+
+shape_prior:
+  enabled: true
+  model_path: workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.npz
+  weight: 0.25
+  mode: mixture
+  reward_mode: delta
+  normalize_over_frontier: true
+  clip: 5.0
+  bin_size_um: 2.0
 
 stopping:
   moving_avg_window: 30

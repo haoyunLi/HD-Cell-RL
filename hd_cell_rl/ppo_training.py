@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime as dt
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -112,6 +113,7 @@ from .ppo_state import (
     _compute_state_feature_bundle,
     _compute_state_summary_from_mask,
     _expression_reward_terms_per_bin,
+    _shape_reward_terms_per_bin,
     _fill_dynamic_action_features,
     _global_features_from_bundle,
     _observation_to_tensors,
@@ -126,6 +128,7 @@ from .ppo_state import (
     _scale_grow_ratio_feature,
     _scale_seed_size_feature,
     _softmax_1d,
+    _state_summary_from_bundle,
     _zscore_1d,
 )
 from .reward import (
@@ -277,38 +280,20 @@ class AddStopCellEnv:
         return _softmax_1d(scores)
 
     def _add_reward_for_bin(self, bin_idx: int) -> float:
-        neighbor_support = float(
-            compute_neighbor_support_fraction(self._membership_mask, self._ctx.neighbor_index)[bin_idx]
-        )
-        _, expr_new_term, _, expr_old_term = _expression_reward_terms_per_bin(
-            ctx=self._ctx,
-            membership_mask=self._membership_mask,
-            posterior=self._posterior(),
-            frontier_mask=self._action_mask[1:],
-        )
-        return float(
-            self._ctx.w1 * float(expr_new_term[bin_idx])
-            + self._ctx.w5 * float(expr_old_term[bin_idx])
-            - self._ctx.base_penalty[bin_idx]
-            + self._ctx.w4 * neighbor_support
-        )
+        r_add = self._all_add_rewards(self._posterior())
+        return float(r_add[int(bin_idx)])
 
     def _all_add_rewards(self, posterior: np.ndarray) -> np.ndarray:
-        _, expr_new_term, _, expr_old_term = _expression_reward_terms_per_bin(
-            ctx=self._ctx,
-            membership_mask=self._membership_mask,
-            posterior=posterior,
-            frontier_mask=self._action_mask[1:],
-        )
         neighbor_support = compute_neighbor_support_fraction(self._membership_mask, self._ctx.neighbor_index).astype(
             np.float32,
             copy=False,
         )
-        return (
-            self._ctx.w1 * expr_new_term
-            + self._ctx.w5 * expr_old_term
-            - self._ctx.base_penalty
-            + self._ctx.w4 * neighbor_support
+        return _add_rewards_from_membership_mask(
+            ctx=self._ctx,
+            membership_mask=self._membership_mask,
+            posterior=posterior,
+            neighbor_support=neighbor_support,
+            frontier_mask=self._action_mask[1:],
         )
 
     def _stop_reward(self) -> float:
@@ -348,6 +333,7 @@ class AddStopCellEnv:
             membership_mask=self._membership_mask,
             bundle=bundle,
         )
+        state_summary = _state_summary_from_bundle(bundle)
 
         return {
             "global_features": self._global_features,
@@ -355,6 +341,7 @@ class AddStopCellEnv:
             "action_mask": self._action_mask,
             "membership_mask": self._membership_mask,
             "step_index": int(self._step_index),
+            "state_summary": state_summary,
         }
 
     def _refresh_dynamic_action_state(self) -> None:
@@ -792,10 +779,7 @@ def run_ppo_training(config: PPOTrainingConfig) -> PPOTrainingResult:
     _write_json(config_dir / "metadata.json", _build_metadata(run_dir=run_dir, seed=config.seed))
 
     device = _resolve_device(config.device)
-    if device.type == "cpu" and config.rollout_mode == "legacy" and int(config.n_rollout_workers) > 1:
-        # Avoid severe CPU oversubscription when many rollout workers call PyTorch.
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
+    _configure_torch_cpu_threads(device=device, config=config)
     _set_global_seeds(config.seed)
     rng = np.random.default_rng(config.seed)
 
@@ -1237,3 +1221,35 @@ def _resolve_device(device_name: str) -> torch.device:
             raise RuntimeError("run.device is 'cuda' but CUDA is not available")
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+def _configure_torch_cpu_threads(*, device: torch.device, config: PPOTrainingConfig) -> None:
+    if device.type != "cpu":
+        return
+    num_threads = _positive_int_env("TORCH_NUM_THREADS")
+    interop_threads = _positive_int_env("TORCH_NUM_INTEROP_THREADS")
+
+    if config.rollout_mode == "legacy" and int(config.n_rollout_workers) > 1:
+        # Avoid severe CPU oversubscription when many rollout workers call PyTorch.
+        num_threads = 1 if num_threads is None else num_threads
+        interop_threads = 1 if interop_threads is None else interop_threads
+
+    if num_threads is not None:
+        torch.set_num_threads(int(num_threads))
+    if interop_threads is not None and int(torch.get_num_interop_threads()) != int(interop_threads):
+        try:
+            torch.set_num_interop_threads(int(interop_threads))
+        except RuntimeError:
+            # PyTorch only allows setting interop threads before parallel work starts.
+            # The run log records the actual value so this remains visible.
+            return
+
+
+def _positive_int_env(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    value = int(str(raw).strip())
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0 when set")
+    return value

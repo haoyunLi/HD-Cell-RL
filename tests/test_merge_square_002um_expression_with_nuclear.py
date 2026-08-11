@@ -71,7 +71,7 @@ class MergeSquare002umExpressionWithNuclearTests(unittest.TestCase):
 
             metadata_df, claims_df, selected_features_df, selected_feature_indices, manifest = build_square_002um_rl_metadata(
                 nuclear_annotation_path=nuclear_path,
-                matrix_h5_path=matrix_h5_path,
+                matrix_path=matrix_h5_path,
                 tissue_positions_parquet=tissue_path,
                 barcodes_tsv_path=barcodes_tsv_path,
                 microns_per_pixel=1.0,

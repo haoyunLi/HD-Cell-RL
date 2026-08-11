@@ -42,6 +42,10 @@ from .ppo_feature_schema import (
     G_SEED_SIZE_SCALED,
     G_STEP_FRAC,
 )
+from .shape_prior import (
+    ShapePriorModel,
+    compute_delta_shape_rewards_for_candidates,
+)
 from .reward import (
     compute_frontier_eligible_mask,
     compute_neighbor_support_fraction,
@@ -81,6 +85,18 @@ class EpisodeContext:
     expression_confidence_pseudocount: float
     normalize_expression_zscore: bool
     zscore_delta: float
+    competition_margin_weight: float = 0.0
+    competition_margin_radius_um: float = 20.0
+    competition_margin_clip: float = 5.0
+    competition_margin_affects_stop: bool = True
+    shape_prior_model: ShapePriorModel | None = None
+    shape_prior_weight: float = 0.0
+    shape_prior_mode: str = "mixture"
+    shape_prior_reward_mode: str = "delta"
+    shape_prior_normalize_over_frontier: bool = True
+    shape_prior_clip: float | None = 5.0
+    shape_prior_bin_size_um: float = 2.0
+    stcs_reward_scores: np.ndarray | None = None
 
     @property
     def n_bins(self) -> int:
@@ -124,6 +140,8 @@ class StateFeatureBundle:
     neighbor_support: np.ndarray
     expr_raw: np.ndarray
     expr_term: np.ndarray
+    shape_raw: np.ndarray
+    shape_term: np.ndarray
     add_rewards: np.ndarray
     candidate_centroid_distance: np.ndarray
     candidate_compactness_gain: np.ndarray
@@ -211,6 +229,11 @@ def _compute_state_summary_from_mask(
 ) -> dict[str, float]:
     """Compute dynamic scalar features for one state."""
     bundle = _compute_state_feature_bundle(ctx=ctx, membership_mask=membership_mask, step_index=step_index)
+    return _state_summary_from_bundle(bundle)
+
+
+def _state_summary_from_bundle(bundle: StateFeatureBundle) -> dict[str, float]:
+    """Extract scalar cache fields from a computed state bundle."""
     return {
         "assigned_frac": bundle.assigned_frac,
         "step_frac": bundle.step_frac,
@@ -290,11 +313,17 @@ def _compute_state_feature_bundle(
         posterior=posterior,
         frontier_mask=frontier,
     )
+    shape_raw, shape_term = _shape_reward_terms_per_bin(
+        ctx=ctx,
+        membership_mask=mask,
+        frontier_mask=frontier,
+    )
     add_rewards = (
         ctx.w1 * expr_term
         + ctx.w5 * expr_old_term
         - ctx.base_penalty
         + ctx.w4 * neighbor_support
+        + ctx.shape_prior_weight * shape_term
     ).astype(np.float32, copy=False)
 
     if np.any(frontier):
@@ -365,6 +394,8 @@ def _compute_state_feature_bundle(
         neighbor_support=neighbor_support.astype(np.float32, copy=False),
         expr_raw=expr_raw.astype(np.float32, copy=False),
         expr_term=expr_term.astype(np.float32, copy=False),
+        shape_raw=shape_raw.astype(np.float32, copy=False),
+        shape_term=shape_term.astype(np.float32, copy=False),
         add_rewards=add_rewards.astype(np.float32, copy=False),
         candidate_centroid_distance=candidate_centroid_distance.astype(np.float32, copy=False),
         candidate_compactness_gain=candidate_compactness_gain.astype(np.float32, copy=False),
@@ -661,6 +692,45 @@ def _expression_reward_terms_per_bin(
     )
 
 
+def _shape_reward_terms_per_bin(
+    *,
+    ctx: EpisodeContext,
+    membership_mask: np.ndarray,
+    frontier_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return raw and normalized exact-hull delta shape reward per candidate bin."""
+    n_bins = int(ctx.n_bins)
+    raw = np.zeros((n_bins,), dtype=np.float32)
+    term = np.zeros((n_bins,), dtype=np.float32)
+    if (
+        ctx.shape_prior_model is None
+        or float(ctx.shape_prior_weight) <= 0.0
+        or n_bins == 0
+        or not np.any(frontier_mask)
+    ):
+        return raw, term
+
+    frontier = np.asarray(frontier_mask, dtype=bool)
+    candidate_indices = np.flatnonzero(frontier)
+    raw_values, _, _ = compute_delta_shape_rewards_for_candidates(
+        membership_mask=np.asarray(membership_mask, dtype=np.uint8),
+        candidate_indices=candidate_indices,
+        candidate_bin_xy_um=ctx.candidate_bin_xy_um,
+        shape_model=ctx.shape_prior_model,
+        mode=str(ctx.shape_prior_mode),
+        bin_size_um=float(ctx.shape_prior_bin_size_um),
+        epsilon=1.0e-8,
+    )
+    raw = raw_values.astype(np.float32, copy=False)
+    if ctx.shape_prior_normalize_over_frontier:
+        term = _zscore_over_frontier(raw, frontier, ctx.zscore_delta)
+    else:
+        term = raw.astype(np.float32, copy=False)
+    if ctx.shape_prior_clip is not None:
+        term = np.clip(term, -float(ctx.shape_prior_clip), float(ctx.shape_prior_clip)).astype(np.float32, copy=False)
+    return raw.astype(np.float32, copy=False), term.astype(np.float32, copy=False)
+
+
 def _add_rewards_from_membership_mask(
     *,
     ctx: EpisodeContext,
@@ -676,7 +746,18 @@ def _add_rewards_from_membership_mask(
         posterior=posterior,
         frontier_mask=frontier_mask,
     )
-    return ctx.w1 * expr_new_term + ctx.w5 * expr_old_term - ctx.base_penalty + ctx.w4 * neighbor_support
+    _, shape_term = _shape_reward_terms_per_bin(
+        ctx=ctx,
+        membership_mask=membership_mask,
+        frontier_mask=frontier_mask,
+    )
+    return (
+        ctx.w1 * expr_new_term
+        + ctx.w5 * expr_old_term
+        - ctx.base_penalty
+        + ctx.w4 * neighbor_support
+        + ctx.shape_prior_weight * shape_term
+    )
 
 
 def _scale_seed_size_feature(seed_count: int, *, cap: int = 32) -> float:

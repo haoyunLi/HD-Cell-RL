@@ -38,6 +38,7 @@ class EpisodeStep:
     planner_mode: int = PLANNER_MODE_BALANCED
     compact_streak: int = 0
     low_level_train: bool = True
+    state_summary: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class PlannerStep:
     mode: int
     old_log_prob: float
     compact_streak: int = 0
+    state_summary: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,7 @@ class RolloutTransition:
     advantage: float
     planner_mode: int = PLANNER_MODE_BALANCED
     compact_streak: int = 0
+    state_summary: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ class PlannerRolloutTransition:
     old_log_prob: float
     advantage: float
     compact_streak: int = 0
+    state_summary: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +384,7 @@ def _build_rollout_buffer(
                     advantage=float(advantages[i]),
                     planner_mode=int(step.planner_mode),
                     compact_streak=int(step.compact_streak),
+                    state_summary=None if step.state_summary is None else dict(step.state_summary),
                 )
             )
 
@@ -400,6 +405,7 @@ def _build_rollout_buffer(
                 advantage=float(adv[i]),
                 planner_mode=t.planner_mode,
                 compact_streak=t.compact_streak,
+                state_summary=None if t.state_summary is None else dict(t.state_summary),
             )
             for i, t in enumerate(out)
         ]
@@ -425,6 +431,7 @@ def _build_planner_rollout_buffer(
                     old_log_prob=float(planner_step.old_log_prob),
                     advantage=float(episode_advantage_bonus[traj_idx]),
                     compact_streak=int(planner_step.compact_streak),
+                    state_summary=None if planner_step.state_summary is None else dict(planner_step.state_summary),
                 )
             )
     return out
@@ -490,8 +497,11 @@ def _build_rollout_feature_cache(
         ep = int(t.episode_slot)
         ctx = episode_contexts[ep]
         packed_membership = np.asarray(t.packed_membership_mask, dtype=np.uint8).copy()
-        membership = _unpack_mask(packed_membership, n_bits=ctx.n_bins)
-        summary = _compute_state_summary_from_mask(ctx=ctx, membership_mask=membership, step_index=int(t.step_index))
+        if t.state_summary is None:
+            membership = _unpack_mask(packed_membership, n_bits=ctx.n_bins)
+            summary = _compute_state_summary_from_mask(ctx=ctx, membership_mask=membership, step_index=int(t.step_index))
+        else:
+            summary = t.state_summary
 
         episode_slot[i] = ep
         packed_membership_masks.append(packed_membership)
@@ -596,8 +606,11 @@ def _build_planner_rollout_feature_cache(
         ep = int(t.episode_slot)
         ctx = episode_contexts[ep]
         packed_membership = np.asarray(t.packed_membership_mask, dtype=np.uint8).copy()
-        membership = _unpack_mask(packed_membership, n_bits=ctx.n_bins)
-        summary = _compute_state_summary_from_mask(ctx=ctx, membership_mask=membership, step_index=int(t.step_index))
+        if t.state_summary is None:
+            membership = _unpack_mask(packed_membership, n_bits=ctx.n_bins)
+            summary = _compute_state_summary_from_mask(ctx=ctx, membership_mask=membership, step_index=int(t.step_index))
+        else:
+            summary = t.state_summary
 
         episode_slot[i] = ep
         packed_membership_masks.append(packed_membership)

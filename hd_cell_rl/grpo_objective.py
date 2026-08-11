@@ -46,6 +46,7 @@ def _compute_full_grpo_episode_scores(
             + float(config.full_grpo_stop_weight) * stop_score
             - float(config.full_grpo_overgrowth_weight) * float(evidence["overgrowth_risk"])
             + float(config.full_grpo_compact_weight) * float(evidence["compactness"])
+            + _shape_cot_weight(config) * float(evidence.get("shape_quality", 0.0))
         )
         if bool(config.planner_enabled) and traj.planner_steps:
             node_scores = [
@@ -124,6 +125,19 @@ def _full_grpo_evidence_state(
     )
     overgrowth_risk = float(bundle.grow_ratio_scaled) * (1.0 - frontier_quality)
     support_topk = _masked_topk_mean(bundle.neighbor_support, bundle.frontier_mask, k=int(ctx.stop_top_k))
+    shape = np.asarray(bundle.shape_term, dtype=np.float64)
+    if has_frontier:
+        active_shape = shape[np.asarray(bundle.frontier_mask, dtype=bool)]
+        frontier_shape_topk_mean = _masked_topk_mean(shape, bundle.frontier_mask, k=int(ctx.stop_top_k))
+        frontier_shape_max = float(np.max(active_shape))
+        frontier_shape_mean = float(np.mean(active_shape))
+        frontier_shape_positive_fraction = float(np.mean(active_shape > 0.0))
+    else:
+        frontier_shape_topk_mean = 0.0
+        frontier_shape_max = 0.0
+        frontier_shape_mean = 0.0
+        frontier_shape_positive_fraction = 0.0
+    shape_quality = float(np.tanh(frontier_shape_topk_mean))
     return {
         "frontier_quality": float(frontier_quality),
         "overgrowth_risk": float(overgrowth_risk),
@@ -133,6 +147,11 @@ def _full_grpo_evidence_state(
         "frontier_add_reward_mean": float(bundle.frontier_add_reward_mean),
         "frontier_add_reward_topk_mean": float(bundle.frontier_add_reward_topk_mean),
         "frontier_neighbor_support_topk_mean": float(support_topk),
+        "frontier_shape_topk_mean": float(frontier_shape_topk_mean),
+        "frontier_shape_max": float(frontier_shape_max),
+        "frontier_shape_mean": float(frontier_shape_mean),
+        "frontier_shape_positive_fraction": float(frontier_shape_positive_fraction),
+        "shape_quality": float(shape_quality),
     }
 
 
@@ -172,6 +191,10 @@ def _full_grpo_key_node_score(
     overgrowth_risk = float(evidence["overgrowth_risk"])
     compactness = float(evidence["compactness"])
     support_topk = float(evidence["frontier_neighbor_support_topk_mean"])
+    shape_quality = float(evidence.get("shape_quality", 0.0))
+    shape_good = max(shape_quality, 0.0)
+    shape_bad = max(-shape_quality, 0.0)
+    shape_cot_weight = _shape_cot_weight(config)
     compact_streak_scaled = compact_streak_scale_fn(int(planner_step.compact_streak))
     mode = int(planner_step.mode)
 
@@ -180,11 +203,12 @@ def _full_grpo_key_node_score(
             stopped=True,
             frontier_quality=frontier_quality,
             overgrowth_risk=overgrowth_risk,
-        )
+        ) + shape_cot_weight * shape_bad
     elif mode == _PLANNER_MODE_COMPACT:
         mode_score = (
             float(config.full_grpo_compact_weight) * compactness
             + support_topk
+            + shape_cot_weight * shape_good * (0.5 + support_topk)
             - float(config.full_grpo_overgrowth_weight) * overgrowth_risk
             - float(config.full_grpo_compact_streak_weight) * compact_streak_scaled
         )
@@ -192,11 +216,19 @@ def _full_grpo_key_node_score(
         mode_score = (
             float(config.full_grpo_explore_weight) * frontier_quality
             + float(evidence["frontier_add_reward_max"])
+            + 0.5 * shape_cot_weight * shape_good
             - float(evidence["centroid_drift"])
+            - shape_cot_weight * shape_bad
+            - shape_cot_weight * overgrowth_risk
             - 0.5 * float(config.full_grpo_overgrowth_weight) * overgrowth_risk
         )
     else:
         mode_score = frontier_quality + 0.5 * compactness - 0.5 * overgrowth_risk
+        mode_score += 0.5 * shape_cot_weight * shape_quality
 
     evidence_score = frontier_quality - overgrowth_risk
     return float(float(config.full_grpo_evidence_growth_weight) * evidence_score + mode_score)
+
+
+def _shape_cot_weight(config: Any) -> float:
+    return float(getattr(config, "full_grpo_shape_cot_weight", 0.0))

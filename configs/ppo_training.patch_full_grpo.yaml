@@ -1,0 +1,30 @@
+base_ppo_config: configs/ppo_training.full_grpo.yaml
+
+# Patch competition averages many core cells, so single-cell add rewards become
+# too weak if reused directly. These overrides affect patch training only.
+base_config_overrides:
+  reward:
+    w1: 0.675
+    w2: 0.1
+    w5: 0.15
+    stop_lambda: 0.2
+  shape_prior:
+    weight: 0.65
+
+run:
+  name: human_colorectal_patch_full_grpo
+  output_root: runs
+  seed: 7
+  device: cpu
+  batch_patches: 8
+  max_updates: 500
+  policy_mode: sample
+  vf_coef: 0.0
+  warm_start_checkpoint: runs/human_colorectal_full_grpo_20260508T171415Z/checkpoints/best_model.pt
+
+patch_training:
+  patches_index_path: runs/example_patch_episode_build/patches_index.csv
+  max_steps_per_patch: 300
+  margin_cells_compete: true
+  use_core_cells_for_score: true
+  score_normalization: sqrt_core_cells

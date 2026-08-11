@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from hd_cell_rl.matrix_io import resolve_matrix_csc_h5_path
 from hd_cell_rl.reward import compute_reference_distribution
-from hd_cell_rl.reward_grid_search import (
+from hd_cell_rl.episode_artifacts import (
     _MatrixOnDemandExpressionLoader,
     _build_nuclei_centers,
     _build_nuclei_spatial_index,

@@ -71,6 +71,7 @@ class PPOTrainingConfig:
     nuclei_format: str
     nuclei_columns: dict[str, str]
     expression_cache_size: int | None
+    episode_context_cache_size: int
 
     gamma: float
     gae_lambda: float
@@ -109,6 +110,7 @@ class PPOTrainingConfig:
     full_grpo_explore_weight: float
     full_grpo_tau_frontier: float
     full_grpo_frontier_temp: float
+    full_grpo_shape_cot_weight: float
 
     epsilon: float
     r_max_um: float
@@ -123,6 +125,19 @@ class PPOTrainingConfig:
     expression_confidence_pseudocount: float
     normalize_expression_zscore: bool
     zscore_delta: float
+    competition_margin_weight: float
+    competition_margin_radius_um: float
+    competition_margin_clip: float
+    competition_margin_affects_stop: bool
+
+    shape_prior_enabled: bool
+    shape_prior_model_path: Path | None
+    shape_prior_weight: float
+    shape_prior_mode: str
+    shape_prior_reward_mode: str
+    shape_prior_normalize_over_frontier: bool
+    shape_prior_clip: float | None
+    shape_prior_bin_size_um: float
 
     moving_avg_window: int
     min_improvement: float
@@ -157,6 +172,7 @@ class PPOTrainingConfig:
                     "columns": self.nuclei_columns,
                 },
                 "expression_cache_size": self.expression_cache_size,
+                "episode_context_cache_size": self.episode_context_cache_size,
             },
             "ppo": {
                 "gamma": self.gamma,
@@ -199,6 +215,7 @@ class PPOTrainingConfig:
                 "explore_weight": self.full_grpo_explore_weight,
                 "tau_frontier": self.full_grpo_tau_frontier,
                 "frontier_temp": self.full_grpo_frontier_temp,
+                "shape_cot_weight": self.full_grpo_shape_cot_weight,
             },
             "reward": {
                 "epsilon": self.epsilon,
@@ -214,6 +231,20 @@ class PPOTrainingConfig:
                 "expression_confidence_pseudocount": self.expression_confidence_pseudocount,
                 "normalize_expression_zscore": self.normalize_expression_zscore,
                 "zscore_delta": self.zscore_delta,
+                "competition_margin_weight": self.competition_margin_weight,
+                "competition_margin_radius_um": self.competition_margin_radius_um,
+                "competition_margin_clip": self.competition_margin_clip,
+                "competition_margin_affects_stop": self.competition_margin_affects_stop,
+            },
+            "shape_prior": {
+                "enabled": self.shape_prior_enabled,
+                "model_path": None if self.shape_prior_model_path is None else str(self.shape_prior_model_path),
+                "weight": self.shape_prior_weight,
+                "mode": self.shape_prior_mode,
+                "reward_mode": self.shape_prior_reward_mode,
+                "normalize_over_frontier": self.shape_prior_normalize_over_frontier,
+                "clip": self.shape_prior_clip,
+                "bin_size_um": self.shape_prior_bin_size_um,
             },
             "stopping": {
                 "moving_avg_window": self.moving_avg_window,
@@ -239,6 +270,7 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     ppo = _as_dict(raw.get("ppo"), "ppo")
     reward = _as_dict(raw.get("reward"), "reward")
     stopping = _as_dict(raw.get("stopping"), "stopping")
+    shape_prior = _as_dict(raw.get("shape_prior", {}), "shape_prior")
 
     run_name = str(run.get("name", "hd_cell_ppo")).strip()
     if not run_name:
@@ -285,6 +317,9 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     expression_cache_size = None if expression_cache_size_raw is None else int(expression_cache_size_raw)
     if expression_cache_size is not None and expression_cache_size < 0:
         raise ConfigError("inputs.expression_cache_size must be >= 0 when provided")
+    episode_context_cache_size = int(inputs.get("episode_context_cache_size", 512))
+    if episode_context_cache_size < 0:
+        raise ConfigError("inputs.episode_context_cache_size must be >= 0")
 
     gamma = float(ppo.get("gamma", 0.99))
     if not (0.0 < gamma <= 1.0):
@@ -376,6 +411,7 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     full_grpo_explore_weight = float(full_grpo.get("explore_weight", 0.4))
     full_grpo_tau_frontier = float(full_grpo.get("tau_frontier", 0.0))
     full_grpo_frontier_temp = float(full_grpo.get("frontier_temp", 0.2))
+    full_grpo_shape_cot_weight = float(full_grpo.get("shape_cot_weight", 0.0))
     for name, val in (
         ("reward_weight", full_grpo_reward_weight),
         ("evidence_growth_weight", full_grpo_evidence_growth_weight),
@@ -384,6 +420,7 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
         ("compact_weight", full_grpo_compact_weight),
         ("compact_streak_weight", full_grpo_compact_streak_weight),
         ("explore_weight", full_grpo_explore_weight),
+        ("shape_cot_weight", full_grpo_shape_cot_weight),
     ):
         if val < 0:
             raise ConfigError(f"full_grpo.{name} must be >= 0")
@@ -411,9 +448,12 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     expression_confidence_pseudocount = float(reward.get("expression_confidence_pseudocount", 5.0))
     if expression_confidence_pseudocount < 0:
         raise ConfigError("reward.expression_confidence_pseudocount must be >= 0")
-    for name, val in (("w1", w1), ("w2", w2), ("w3", w3), ("stop_lambda", stop_lambda)):
+    for name, val in (("w1", w1), ("stop_lambda", stop_lambda)):
         if val <= 0:
             raise ConfigError(f"reward.{name} must be > 0")
+    for name, val in (("w2", w2), ("w3", w3)):
+        if val < 0:
+            raise ConfigError(f"reward.{name} must be >= 0")
     if w4 < 0:
         raise ConfigError("reward.w4 must be >= 0")
     if w5 < 0:
@@ -422,6 +462,39 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     zscore_delta = float(reward.get("zscore_delta", 1e-8))
     if zscore_delta <= 0:
         raise ConfigError("reward.zscore_delta must be > 0")
+    competition_margin_weight = float(reward.get("competition_margin_weight", 0.0))
+    if competition_margin_weight < 0:
+        raise ConfigError("reward.competition_margin_weight must be >= 0")
+    competition_margin_radius_um = float(reward.get("competition_margin_radius_um", 20.0))
+    if competition_margin_radius_um <= 0:
+        raise ConfigError("reward.competition_margin_radius_um must be > 0")
+    competition_margin_clip = float(reward.get("competition_margin_clip", 5.0))
+    if competition_margin_clip <= 0:
+        raise ConfigError("reward.competition_margin_clip must be > 0")
+    competition_margin_affects_stop = bool(reward.get("competition_margin_affects_stop", True))
+
+    shape_prior_enabled = bool(shape_prior.get("enabled", False))
+    shape_prior_model_raw = shape_prior.get("model_path", None)
+    shape_prior_model_path = None if shape_prior_model_raw in (None, "") else Path(str(shape_prior_model_raw)).expanduser().resolve()
+    if shape_prior_enabled and shape_prior_model_path is None:
+        raise ConfigError("shape_prior.model_path is required when shape_prior.enabled is true")
+    shape_prior_weight = float(shape_prior.get("weight", 0.0))
+    if shape_prior_weight < 0:
+        raise ConfigError("shape_prior.weight must be >= 0")
+    shape_prior_mode = str(shape_prior.get("mode", "mixture")).strip().lower()
+    if shape_prior_mode not in {"mixture", "max", "best"}:
+        raise ConfigError("shape_prior.mode must be mixture or max")
+    shape_prior_reward_mode = str(shape_prior.get("reward_mode", "delta")).strip().lower()
+    if shape_prior_reward_mode != "delta":
+        raise ConfigError("shape_prior.reward_mode currently supports only delta")
+    shape_prior_normalize_over_frontier = bool(shape_prior.get("normalize_over_frontier", True))
+    shape_prior_clip_raw = shape_prior.get("clip", 5.0)
+    shape_prior_clip = None if shape_prior_clip_raw is None else float(shape_prior_clip_raw)
+    if shape_prior_clip is not None and shape_prior_clip <= 0:
+        raise ConfigError("shape_prior.clip must be > 0 when provided")
+    shape_prior_bin_size_um = float(shape_prior.get("bin_size_um", 2.0))
+    if shape_prior_bin_size_um <= 0:
+        raise ConfigError("shape_prior.bin_size_um must be > 0")
 
     moving_avg_window = int(stopping.get("moving_avg_window", 20))
     if moving_avg_window <= 0:
@@ -453,6 +526,7 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
         nuclei_format=nuclei_format,
         nuclei_columns=nuclei_columns,
         expression_cache_size=expression_cache_size,
+        episode_context_cache_size=episode_context_cache_size,
         gamma=gamma,
         gae_lambda=gae_lambda,
         normalize_returns_per_episode=normalize_returns_per_episode,
@@ -487,6 +561,7 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
         full_grpo_explore_weight=full_grpo_explore_weight,
         full_grpo_tau_frontier=full_grpo_tau_frontier,
         full_grpo_frontier_temp=full_grpo_frontier_temp,
+        full_grpo_shape_cot_weight=full_grpo_shape_cot_weight,
         epsilon=epsilon,
         r_max_um=r_max_um,
         w1=w1,
@@ -500,6 +575,18 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
         expression_confidence_pseudocount=expression_confidence_pseudocount,
         normalize_expression_zscore=normalize_expression_zscore,
         zscore_delta=zscore_delta,
+        competition_margin_weight=competition_margin_weight,
+        competition_margin_radius_um=competition_margin_radius_um,
+        competition_margin_clip=competition_margin_clip,
+        competition_margin_affects_stop=competition_margin_affects_stop,
+        shape_prior_enabled=shape_prior_enabled,
+        shape_prior_model_path=shape_prior_model_path,
+        shape_prior_weight=shape_prior_weight,
+        shape_prior_mode=shape_prior_mode,
+        shape_prior_reward_mode=shape_prior_reward_mode,
+        shape_prior_normalize_over_frontier=shape_prior_normalize_over_frontier,
+        shape_prior_clip=shape_prior_clip,
+        shape_prior_bin_size_um=shape_prior_bin_size_um,
         moving_avg_window=moving_avg_window,
         min_improvement=min_improvement,
         patience=patience,

@@ -1,39 +1,6 @@
 """Public API for the HD spatial-cell RL scaffold."""
 
-from .actions import Action, ActionType
-from .builder import build_episode_for_cell, build_episodes
-from .config import EnvironmentConfig
-from .episode_build import EpisodeBuildConfig, run_episode_build, run_episode_build_from_config
-from .environment import CellAssignmentEnv
-from .models import BinRecord, CellEpisodeData, NucleusRecord
-from .policy import Policy, RandomPolicy
-from .reward import (
-    PosteriorAddBinReward,
-    RewardFunction,
-    ZeroReward,
-    compute_bin_log_likelihood_by_type,
-    compute_reference_distribution,
-)
-from .reward_grid_search import (
-    GridAxis,
-    RewardGridSearchConfig,
-    run_reward_grid_search,
-    run_reward_grid_search_from_config,
-)
-from .state import CellAssignmentState
-
-try:
-    from .ppo_training import (
-        ActorCritic,
-        PPOTrainingConfig,
-        run_ppo_training,
-        run_ppo_training_from_config,
-    )
-    _HAS_PPO = True
-except ModuleNotFoundError as exc:
-    if exc.name != "torch":
-        raise
-    _HAS_PPO = False
+from __future__ import annotations
 
 __all__ = [
     "Action",
@@ -47,27 +14,58 @@ __all__ = [
     "NucleusRecord",
     "Policy",
     "PosteriorAddBinReward",
-    "GridAxis",
     "RandomPolicy",
     "RewardFunction",
-    "RewardGridSearchConfig",
     "ZeroReward",
     "build_episode_for_cell",
     "build_episodes",
     "run_episode_build",
     "run_episode_build_from_config",
-    "run_reward_grid_search",
-    "run_reward_grid_search_from_config",
     "compute_bin_log_likelihood_by_type",
     "compute_reference_distribution",
+    "PPOTrainingConfig",
+    "ActorCritic",
+    "run_ppo_training",
+    "run_ppo_training_from_config",
 ]
 
-if _HAS_PPO:
-    __all__.extend(
-        [
-            "PPOTrainingConfig",
-            "ActorCritic",
-            "run_ppo_training",
-            "run_ppo_training_from_config",
-        ]
-    )
+_LAZY_EXPORTS = {
+    "Action": (".actions", "Action"),
+    "ActionType": (".actions", "ActionType"),
+    "build_episode_for_cell": (".builder", "build_episode_for_cell"),
+    "build_episodes": (".builder", "build_episodes"),
+    "EnvironmentConfig": (".config", "EnvironmentConfig"),
+    "EpisodeBuildConfig": (".episode_build", "EpisodeBuildConfig"),
+    "run_episode_build": (".episode_build", "run_episode_build"),
+    "run_episode_build_from_config": (".episode_build", "run_episode_build_from_config"),
+    "CellAssignmentEnv": (".environment", "CellAssignmentEnv"),
+    "BinRecord": (".models", "BinRecord"),
+    "CellEpisodeData": (".models", "CellEpisodeData"),
+    "NucleusRecord": (".models", "NucleusRecord"),
+    "Policy": (".policy", "Policy"),
+    "RandomPolicy": (".policy", "RandomPolicy"),
+    "PosteriorAddBinReward": (".reward", "PosteriorAddBinReward"),
+    "RewardFunction": (".reward", "RewardFunction"),
+    "ZeroReward": (".reward", "ZeroReward"),
+    "compute_bin_log_likelihood_by_type": (".reward", "compute_bin_log_likelihood_by_type"),
+    "compute_reference_distribution": (".reward", "compute_reference_distribution"),
+    "CellAssignmentState": (".state", "CellAssignmentState"),
+    "PPOTrainingConfig": (".ppo_config", "PPOTrainingConfig"),
+    "ActorCritic": (".ppo_model", "ActorCritic"),
+    "run_ppo_training": (".ppo_training", "run_ppo_training"),
+    "run_ppo_training_from_config": (".ppo_training", "run_ppo_training_from_config"),
+}
+
+
+def __getattr__(name: str):
+    """Load public objects on demand instead of during package import."""
+    try:
+        module_name, attr_name = _LAZY_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+    from importlib import import_module
+
+    module = import_module(module_name, package=__name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value

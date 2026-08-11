@@ -25,6 +25,7 @@ inputs:
       center_x_um: center_x_um
       center_y_um: center_y_um
   expression_cache_size: null
+  episode_context_cache_size: 512
 
 ppo:
   gamma: 0.99
@@ -82,6 +83,7 @@ full_grpo:
   explore_weight: 0.4
   tau_frontier: 0.0
   frontier_temp: 0.2
+  shape_cot_weight: 0.25
 
 reward:
   epsilon: 1.0e-8
@@ -97,6 +99,16 @@ reward:
   expression_confidence_pseudocount: 5.0
   normalize_expression_zscore: true
   zscore_delta: 1.0e-8
+
+shape_prior:
+  enabled: true
+  model_path: workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.npz
+  weight: 0.25
+  mode: mixture
+  reward_mode: delta
+  normalize_over_frontier: true
+  clip: 5.0
+  bin_size_um: 2.0
 
 stopping:
   moving_avg_window: 30

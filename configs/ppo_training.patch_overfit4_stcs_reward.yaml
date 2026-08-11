@@ -1,0 +1,61 @@
+base_ppo_config: configs/ppo_training.full_grpo.yaml
+
+# Side experiment only:
+# - same overfit4 64um patch workflow
+# - same force-fill + multi-cell joint global-delta agent
+# - reward_backend=stcs replaces only the patch objective/delta reward
+# - main configs/ppo_training.patch_overfit4.yaml is intentionally unchanged
+base_config_overrides:
+  reward:
+    w1: 0.58
+    w2: 0.55
+    w3: 2.40
+    w4: 0.035
+    w5: 0.00
+    stop_lambda: 0.05
+    competition_margin_weight: 0.10
+    competition_margin_radius_um: 20.0
+    competition_margin_clip: 5.0
+    competition_margin_affects_stop: false
+  shape_prior:
+    weight: 0.0
+  stopping:
+    patience: 5
+
+run:
+  name: human_colorectal_patch_overfit4_stcs_reward
+  output_root: runs
+  seed: 7
+  device: cuda
+  rollout_worker_mode: process
+  batch_patches: 16
+  max_updates: 500
+  policy_mode: sample
+  vf_coef: 0.0
+  warm_start_checkpoint: ""
+
+patch_training:
+  patches_index_path: runs/human_colorectal_patch_episode_build/human_colorectal_patches_overfit4_64um_index.csv
+  max_steps_per_patch: 1024
+  margin_cells_compete: true
+  use_core_cells_for_score: true
+  score_normalization: mean_expression_bins
+  force_fill_expression_bins: true
+  fill_target: reachable_expression_bins
+  stop_action_mode: auto_no_improve_after_filled
+  agent_mode: multi_cell_joint_global_delta
+  after_fill_actions: replace_only
+  global_delta_epsilon: 1.0e-6
+  competition_margin_enabled: false
+  rollout_backend: torch_gpu
+  reward_backend: stcs
+  stcs_reward:
+    search_radius_bins: 5
+    lambda_spatial: 0.5
+    normalize_distances: true
+    target_sum: 10000.0
+    n_top_genes: 5000
+    pseudobulk_mode: mean
+    n_pcs: 50
+    spatial_bin_size_um: 2.0
+  cache_patch_contexts: true

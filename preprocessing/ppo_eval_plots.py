@@ -19,6 +19,42 @@ except Exception:
     plt = None  # type: ignore[assignment]
 
 
+_PALETTE = {
+    "ink": "#1F2933",
+    "muted": "#667085",
+    "grid": "#E6E8EC",
+    "candidate": "#D6DAE0",
+    "gt": "#3B82C4",
+    "tp": "#2A9D8F",
+    "fp": "#D95F59",
+    "fn": "#4C78A8",
+    "accent": "#E9A23B",
+}
+
+
+def _configure_matplotlib_style() -> None:
+    if not HAS_MATPLOTLIB:
+        return
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
+            "font.size": 9,
+            "axes.titlesize": 10,
+            "axes.labelsize": 9,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.linewidth": 0.8,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 8,
+            "legend.frameon": False,
+            "figure.dpi": 120,
+            "savefig.dpi": 240,
+        }
+    )
+
+
 def _slug(value: str) -> str:
     text = str(value).strip()
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text)
@@ -91,12 +127,115 @@ def _build_gt_contour_grid(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.n
     return x_coords, y_coords, grid
 
 
+def _build_gt_outline_segments(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    pts = np.asarray(xy, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] == 0:
+        return None
+
+    step_x = _estimate_grid_step(pts[:, 0])
+    step_y = _estimate_grid_step(pts[:, 1])
+    x0 = float(np.min(pts[:, 0]))
+    y0 = float(np.min(pts[:, 1]))
+    ix = np.rint((pts[:, 0] - x0) / step_x).astype(np.int64)
+    iy = np.rint((pts[:, 1] - y0) / step_y).astype(np.int64)
+    occupied = {(int(x), int(y)) for x, y in zip(ix, iy, strict=False)}
+    if not occupied:
+        return None
+
+    x_segments: list[float] = []
+    y_segments: list[float] = []
+    half_x = 0.5 * float(step_x)
+    half_y = 0.5 * float(step_y)
+
+    def add_segment(x1: float, y1: float, x2: float, y2: float) -> None:
+        x_segments.extend([x1, x2, np.nan])
+        y_segments.extend([y1, y2, np.nan])
+
+    for gx, gy in occupied:
+        cx = x0 + float(gx) * float(step_x)
+        cy = y0 + float(gy) * float(step_y)
+        if (gx - 1, gy) not in occupied:
+            add_segment(cx - half_x, cy - half_y, cx - half_x, cy + half_y)
+        if (gx + 1, gy) not in occupied:
+            add_segment(cx + half_x, cy - half_y, cx + half_x, cy + half_y)
+        if (gx, gy - 1) not in occupied:
+            add_segment(cx - half_x, cy - half_y, cx + half_x, cy - half_y)
+        if (gx, gy + 1) not in occupied:
+            add_segment(cx - half_x, cy + half_y, cx + half_x, cy + half_y)
+
+    if not x_segments:
+        return None
+    return np.asarray(x_segments, dtype=np.float64), np.asarray(y_segments, dtype=np.float64)
+
+
+def _grid_keys_for_xy(xy: np.ndarray, *, step_x: float, step_y: float) -> list[tuple[int, int]]:
+    pts = np.asarray(xy, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        return []
+    sx = max(float(step_x), 1.0e-8)
+    sy = max(float(step_y), 1.0e-8)
+    ix = np.rint(pts[:, 0] / sx).astype(np.int64)
+    iy = np.rint(pts[:, 1] / sy).astype(np.int64)
+    return [(int(x), int(y)) for x, y in zip(ix, iy, strict=False)]
+
+
 def _finite_float_or_none(value: Any) -> float | None:
     try:
         val = float(value)
     except (TypeError, ValueError):
         return None
     return val if np.isfinite(val) else None
+
+
+def _numeric_values(df: pd.DataFrame, column: str) -> np.ndarray:
+    if column not in df.columns:
+        return np.zeros((0,), dtype=np.float64)
+    values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=np.float64)
+    return values[np.isfinite(values)]
+
+
+def _numeric_pair(df: pd.DataFrame, x_col: str, y_col: str) -> tuple[np.ndarray, np.ndarray]:
+    if x_col not in df.columns or y_col not in df.columns:
+        return np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64)
+    x = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=np.float64)
+    y = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=np.float64)
+    valid = np.isfinite(x) & np.isfinite(y)
+    return x[valid], y[valid]
+
+
+def _annotate_distribution(ax: Any, values: np.ndarray, *, label: str) -> None:
+    if values.size == 0:
+        ax.text(0.5, 0.5, "no valid values", ha="center", va="center", transform=ax.transAxes, color=_PALETTE["muted"])
+        return
+    median = float(np.median(values))
+    mean = float(np.mean(values))
+    ax.axvline(median, color=_PALETTE["ink"], linewidth=1.3, linestyle="-")
+    ax.axvline(mean, color=_PALETTE["accent"], linewidth=1.1, linestyle="--")
+    ax.text(
+        0.98,
+        0.94,
+        f"n={values.size}\nmedian={median:.3g}\nmean={mean:.3g}",
+        ha="right",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=8,
+        color=_PALETTE["ink"],
+    )
+    ax.set_xlabel(label)
+    ax.set_ylabel("cells")
+
+
+def _light_grid(ax: Any) -> None:
+    ax.grid(True, axis="y", color=_PALETTE["grid"], linewidth=0.6)
+    ax.set_axisbelow(True)
+
+
+def _has_useful_reward_variation(df: pd.DataFrame) -> bool:
+    values = _numeric_values(df, "total_reward")
+    if values.size == 0:
+        return False
+    rounded = np.unique(np.round(values, 6))
+    return int(rounded.size) >= 8
 
 
 def _format_overlay_title(row: dict[str, Any], method_label: str) -> str:
@@ -137,101 +276,156 @@ def _format_overlay_title(row: dict[str, Any], method_label: str) -> str:
     return "\n".join(lines)
 
 
+def _save_evaluation_overview(df: pd.DataFrame, plots_dir: Path, *, method_label: str) -> str | None:
+    if "pred_iou" not in df.columns:
+        return None
+
+    iou = _numeric_values(df, "pred_iou")
+    dice = _numeric_values(df, "pred_dice")
+    pred_bins, gt_bins = _numeric_pair(df, "pred_n_bins", "gt_n_bins")
+    precision, recall = _numeric_pair(df, "pred_precision", "pred_recall")
+    precision_color = None
+    if {"pred_precision", "pred_recall", "pred_n_bins", "gt_n_bins"}.issubset(df.columns):
+        p = pd.to_numeric(df["pred_precision"], errors="coerce").to_numpy(dtype=np.float64)
+        r = pd.to_numeric(df["pred_recall"], errors="coerce").to_numpy(dtype=np.float64)
+        pred = pd.to_numeric(df["pred_n_bins"], errors="coerce").to_numpy(dtype=np.float64)
+        gt = pd.to_numeric(df["gt_n_bins"], errors="coerce").to_numpy(dtype=np.float64)
+        valid = np.isfinite(p) & np.isfinite(r) & np.isfinite(pred) & np.isfinite(gt)
+        if np.any(valid):
+            precision = p[valid]
+            recall = r[valid]
+            precision_color = pred[valid] / np.clip(gt[valid], 1.0, None)
+
+    fig, axes = plt.subplots(2, 2, figsize=(9.2, 7.4))
+    fig.suptitle(f"{method_label} evaluation overview", x=0.02, ha="left", fontsize=12, fontweight="bold")
+
+    ax = axes[0, 0]
+    if iou.size:
+        ax.hist(iou, bins=np.linspace(0.0, 1.0, 26), color=_PALETTE["gt"], alpha=0.88, edgecolor="white", linewidth=0.5)
+    _annotate_distribution(ax, iou, label="IoU")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_title("Spatial overlap")
+    _light_grid(ax)
+
+    ax = axes[0, 1]
+    if dice.size:
+        ax.hist(dice, bins=np.linspace(0.0, 1.0, 26), color=_PALETTE["tp"], alpha=0.88, edgecolor="white", linewidth=0.5)
+    _annotate_distribution(ax, dice, label="Dice")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_title("Boundary agreement")
+    _light_grid(ax)
+
+    ax = axes[1, 0]
+    if pred_bins.size:
+        ax.scatter(gt_bins, pred_bins, s=18, color=_PALETTE["ink"], alpha=0.58, linewidths=0.0)
+        limit = float(max(np.max(pred_bins), np.max(gt_bins), 1.0))
+        ax.plot([0.0, limit], [0.0, limit], color=_PALETTE["muted"], linewidth=1.0, linestyle="--")
+        over = float(np.mean(pred_bins > gt_bins))
+        ax.text(
+            0.04,
+            0.95,
+            f"overgrowth={over:.1%}",
+            ha="left",
+            va="top",
+            transform=ax.transAxes,
+            fontsize=8,
+            color=_PALETTE["ink"],
+        )
+        ax.set_xlim(0.0, limit * 1.05)
+        ax.set_ylim(0.0, limit * 1.05)
+    ax.set_title("Predicted size vs GT size")
+    ax.set_xlabel("GT bins")
+    ax.set_ylabel("predicted bins")
+    _light_grid(ax)
+
+    ax = axes[1, 1]
+    if precision.size:
+        if precision_color is None:
+            ax.scatter(recall, precision, s=18, color=_PALETTE["ink"], alpha=0.58, linewidths=0.0)
+        else:
+            sc = ax.scatter(
+                recall,
+                precision,
+                c=np.clip(precision_color, 0.0, 2.5),
+                cmap="viridis",
+                s=18,
+                alpha=0.70,
+                linewidths=0.0,
+            )
+            cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
+            cbar.set_label("pred/GT bins", fontsize=8)
+            cbar.ax.tick_params(labelsize=7)
+    ax.set_title("Precision-recall tradeoff")
+    ax.set_xlabel("recall")
+    ax.set_ylabel("precision")
+    ax.set_xlim(0.0, 1.02)
+    ax.set_ylim(0.0, 1.02)
+    _light_grid(ax)
+
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    path = plots_dir / "evaluation_overview.png"
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
 def save_summary_plots(df: pd.DataFrame, run_dir: Path, *, method_label: str) -> list[str]:
     if not HAS_MATPLOTLIB:
         return []
 
+    _configure_matplotlib_style()
     plots_dir = run_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
 
-    if "total_reward" in df.columns:
-        fig, ax = plt.subplots(figsize=(7.5, 5.0))
-        ax.hist(df["total_reward"].to_numpy(dtype=np.float64), bins=40, color="#2A9D8F", alpha=0.9)
-        ax.set_title("Episode Total Reward Distribution")
-        ax.set_xlabel("Total Reward")
-        ax.set_ylabel("Episode Count")
+    overview = _save_evaluation_overview(df, plots_dir, method_label=method_label)
+    if overview is not None:
+        saved.append(overview)
+
+    if "total_reward" in df.columns and _has_useful_reward_variation(df):
+        rewards = _numeric_values(df, "total_reward")
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        ax.hist(rewards, bins=32, color=_PALETTE["tp"], alpha=0.9, edgecolor="white", linewidth=0.5)
+        _annotate_distribution(ax, rewards, label="total reward")
+        ax.set_title("Reward distribution")
+        _light_grid(ax)
         fig.tight_layout()
         p = plots_dir / "reward_hist.png"
-        fig.savefig(p, dpi=180)
+        fig.savefig(p, bbox_inches="tight")
         plt.close(fig)
         saved.append(str(p))
 
-    fig, ax = plt.subplots(figsize=(7.5, 5.0))
-    ax.hist(df["n_assigned_bins"].to_numpy(dtype=np.float64), bins=40, color="#E76F51", alpha=0.9)
-    ax.set_title("Assigned Bins Distribution")
-    ax.set_xlabel("Assigned Bins")
-    ax.set_ylabel("Episode Count")
+    assigned = _numeric_values(df, "n_assigned_bins")
+    fig, ax = plt.subplots(figsize=(6.2, 4.0))
+    ax.hist(assigned, bins=32, color=_PALETTE["fp"], alpha=0.86, edgecolor="white", linewidth=0.5)
+    _annotate_distribution(ax, assigned, label="assigned bins")
+    ax.set_title("Predicted cell size distribution")
+    _light_grid(ax)
     fig.tight_layout()
     p = plots_dir / "assigned_bins_hist.png"
-    fig.savefig(p, dpi=180)
+    fig.savefig(p, bbox_inches="tight")
     plt.close(fig)
     saved.append(str(p))
 
-    if "total_reward" in df.columns:
-        fig, ax = plt.subplots(figsize=(7.5, 5.0))
+    if "total_reward" in df.columns and _has_useful_reward_variation(df):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
         ax.scatter(
             df["n_assigned_bins"].to_numpy(dtype=np.float64),
             df["total_reward"].to_numpy(dtype=np.float64),
             s=12,
-            alpha=0.5,
-            color="#264653",
+            alpha=0.55,
+            color=_PALETTE["ink"],
             linewidths=0.0,
         )
         ax.set_title("Reward vs Assigned Bins")
         ax.set_xlabel("Assigned Bins")
         ax.set_ylabel("Total Reward")
+        _light_grid(ax)
         fig.tight_layout()
         p = plots_dir / "reward_vs_assigned_bins.png"
-        fig.savefig(p, dpi=180)
+        fig.savefig(p, bbox_inches="tight")
         plt.close(fig)
         saved.append(str(p))
-
-    if "pred_iou" in df.columns:
-        iou = pd.to_numeric(df["pred_iou"], errors="coerce").to_numpy(dtype=np.float64)
-        iou = iou[np.isfinite(iou)]
-        if iou.size > 0:
-            fig, ax = plt.subplots(figsize=(7.5, 5.0))
-            ax.hist(iou, bins=30, color="#457B9D", alpha=0.9)
-            ax.set_title(f"{method_label} vs GT IoU Distribution")
-            ax.set_xlabel("IoU")
-            ax.set_ylabel("Episode Count")
-            fig.tight_layout()
-            p = plots_dir / "pred_gt_iou_hist.png"
-            fig.savefig(p, dpi=180)
-            plt.close(fig)
-            saved.append(str(p))
-
-            fig, ax = plt.subplots(figsize=(7.5, 5.0))
-            iou_sorted = np.sort(iou)
-            cdf_y = np.arange(1, iou_sorted.size + 1, dtype=np.float64) / float(iou_sorted.size)
-            ax.plot(iou_sorted, cdf_y, color="#2A6F97", linewidth=2.0)
-            ax.set_title(f"{method_label} vs GT IoU CDF")
-            ax.set_xlabel("IoU")
-            ax.set_ylabel("Cumulative Fraction")
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.0)
-            ax.grid(True, alpha=0.25, linewidth=0.6)
-            fig.tight_layout()
-            p = plots_dir / "pred_gt_iou_cdf.png"
-            fig.savefig(p, dpi=180)
-            plt.close(fig)
-            saved.append(str(p))
-
-    if "pred_dice" in df.columns:
-        dice = pd.to_numeric(df["pred_dice"], errors="coerce").to_numpy(dtype=np.float64)
-        dice = dice[np.isfinite(dice)]
-        if dice.size > 0:
-            fig, ax = plt.subplots(figsize=(7.5, 5.0))
-            ax.hist(dice, bins=30, color="#1D3557", alpha=0.9)
-            ax.set_title(f"{method_label} vs GT Dice Distribution")
-            ax.set_xlabel("Dice")
-            ax.set_ylabel("Episode Count")
-            fig.tight_layout()
-            p = plots_dir / "pred_gt_dice_hist.png"
-            fig.savefig(p, dpi=180)
-            plt.close(fig)
-            saved.append(str(p))
 
     return saved
 
@@ -249,6 +443,7 @@ def save_overlay_plots(
     if not HAS_MATPLOTLIB or max_cells <= 0 or not records:
         return []
 
+    _configure_matplotlib_style()
     overlays_dir = run_dir / "overlays"
     overlays_dir.mkdir(parents=True, exist_ok=True)
     indices = _choose_overlay_indices(df=df, n_pick=max_cells, selection=selection, seed=seed)
@@ -263,43 +458,78 @@ def save_overlay_plots(
         if assigned.shape[0] != xy.shape[0]:
             continue
 
-        fig, ax = plt.subplots(figsize=(6.2, 6.2))
+        gt_cell_xy = None if rec.gt_cell_xy_um is None else np.asarray(rec.gt_cell_xy_um, dtype=np.float32)
+        in_gt = np.zeros((xy.shape[0],), dtype=bool)
+        fn_xy = np.zeros((0, 2), dtype=np.float32)
+        if gt_cell_xy is not None and gt_cell_xy.ndim == 2 and gt_cell_xy.shape[1] == 2 and gt_cell_xy.shape[0] > 0:
+            combined = np.vstack((xy, gt_cell_xy)).astype(np.float64, copy=False)
+            step_x = _estimate_grid_step(combined[:, 0])
+            step_y = _estimate_grid_step(combined[:, 1])
+            candidate_keys = _grid_keys_for_xy(xy, step_x=step_x, step_y=step_y)
+            gt_keys = set(_grid_keys_for_xy(gt_cell_xy, step_x=step_x, step_y=step_y))
+            assigned_keys = {candidate_keys[i] for i in np.flatnonzero(assigned).tolist()}
+            in_gt = np.asarray([key in gt_keys for key in candidate_keys], dtype=bool)
+            gt_key_list = _grid_keys_for_xy(gt_cell_xy, step_x=step_x, step_y=step_y)
+            fn_keep = [key not in assigned_keys for key in gt_key_list]
+            if any(fn_keep):
+                fn_xy = gt_cell_xy[np.asarray(fn_keep, dtype=bool)]
+
+        tp = assigned & in_gt
+        fp = assigned & (~in_gt)
+
+        fig, ax = plt.subplots(figsize=(6.7, 6.4))
         ax.scatter(
             xy[:, 0],
             xy[:, 1],
-            s=3,
-            c="#D0D4DB",
-            alpha=0.22,
+            s=5,
+            c=_PALETTE["candidate"],
+            alpha=0.20,
             linewidths=0.0,
             zorder=1,
-            label="candidate bins",
+            label="candidate",
         )
-        gt_cell_xy = None if rec.gt_cell_xy_um is None else np.asarray(rec.gt_cell_xy_um, dtype=np.float32)
         if gt_cell_xy is not None and gt_cell_xy.ndim == 2 and gt_cell_xy.shape[1] == 2 and gt_cell_xy.shape[0] > 0:
-            contour_grid = _build_gt_contour_grid(gt_cell_xy)
-            if contour_grid is not None:
-                x_coords, y_coords, grid = contour_grid
-                ax.contour(
-                    x_coords,
-                    y_coords,
-                    grid,
-                    levels=[0.5],
-                    colors=["#1D3557"],
-                    linewidths=3.0,
-                    alpha=1.0,
-                    zorder=4,
-                )
-                ax.plot([], [], color="#1D3557", linewidth=3.0, alpha=1.0, label="GT cell outline")
-        if np.any(assigned):
+            outline = _build_gt_outline_segments(gt_cell_xy)
+            if outline is not None:
+                x_coords, y_coords = outline
+                ax.plot(x_coords, y_coords, color=_PALETTE["gt"], linewidth=1.2, alpha=0.88, zorder=4)
+                ax.plot([], [], color=_PALETTE["gt"], linewidth=1.2, alpha=0.88, label="GT outline")
+        if fn_xy.shape[0] > 0:
             ax.scatter(
-                xy[assigned, 0],
-                xy[assigned, 1],
-                s=8,
-                c="#E63946",
+                fn_xy[:, 0],
+                fn_xy[:, 1],
+                s=24,
+                facecolors="none",
+                edgecolors=_PALETTE["fn"],
+                linewidths=0.9,
+                marker="s",
+                alpha=0.82,
+                zorder=2,
+                label="FN: GT only",
+            )
+        if np.any(tp):
+            ax.scatter(
+                xy[tp, 0],
+                xy[tp, 1],
+                s=18,
+                c=_PALETTE["tp"],
                 alpha=0.95,
-                linewidths=0.0,
-                zorder=3,
-                label="assigned bins",
+                linewidths=0.25,
+                edgecolors="white",
+                zorder=5,
+                label="TP overlap",
+            )
+        if np.any(fp):
+            ax.scatter(
+                xy[fp, 0],
+                xy[fp, 1],
+                s=18,
+                c=_PALETTE["fp"],
+                alpha=0.95,
+                linewidths=0.25,
+                edgecolors="white",
+                zorder=6,
+                label="FP: pred only",
             )
 
         center = np.asarray(rec.nucleus_center_xy_um, dtype=np.float32)
@@ -307,23 +537,24 @@ def save_overlay_plots(
             ax.scatter(
                 [float(center[0])],
                 [float(center[1])],
-                s=90,
+                s=80,
                 marker="x",
-                c="#1D3557",
-                linewidths=2.0,
-                zorder=5,
-                label="nucleus center",
+                c=_PALETTE["ink"],
+                linewidths=1.9,
+                zorder=7,
+                label="nucleus",
             )
 
         ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("x (um)")
         ax.set_ylabel("y (um)")
-        ax.set_title(_format_overlay_title(row, method_label), fontsize=10.5, pad=10)
-        ax.legend(loc="best", fontsize=8, frameon=False)
+        ax.set_title(_format_overlay_title(row, method_label), fontsize=9.5, pad=8, loc="left")
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
+        ax.grid(False)
         fig.tight_layout()
 
         out = overlays_dir / f"overlay_{idx:04d}_{_slug(str(row['cell_id']))}.png"
-        fig.savefig(out, dpi=180, bbox_inches="tight")
+        fig.savefig(out, bbox_inches="tight")
         plt.close(fig)
         saved.append(str(out))
 

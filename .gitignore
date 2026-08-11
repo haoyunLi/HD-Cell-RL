@@ -23,9 +23,12 @@ external/STCS/
 *.out
 *.err
 *.log
+logs/archive/
 
 # Local input/test data
 Human_Colorectal/
 colorectal_sc_data/
 colorectal_pseudo_visium_hd_output_full_0.25/
-figures/
+OLD_CHAT_PROJECT_HANDOFF.md
+web/patch-debug/node_modules/
+web/patch-debug/dist/

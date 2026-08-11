@@ -34,6 +34,7 @@ COLOR_OPTIONS: tuple[str, ...] = (
     "policy_probability",
     "expr_weighted",
     "expr_old_weighted",
+    "shape_weighted",
     "distance_penalty",
     "overlap_penalty",
     "neighbor_bonus",
@@ -97,6 +98,9 @@ REWARD_DECOMP_HELP: dict[str, str] = {
     "expr_old_raw": "Old bin-posterior compatibility score before z-scoring and weighting.",
     "expr_old_term": "Old compatibility term after optional frontier z-scoring.",
     "w5_expr_old": "Old compatibility helper contribution after multiplying by w5.",
+    "shape_raw": "Delta morphology log-likelihood before frontier normalization.",
+    "shape_term": "Delta morphology term after optional frontier z-scoring/clipping.",
+    "w6_shape": "Shape-prior contribution after multiplying by shape_prior.weight.",
     "w2_p_dis": "Distance penalty contribution from w2 * p_dis.",
     "w3_p_overlap": "Overlap penalty contribution from w3 * p_overlap.",
     "w4_neighbor": "Neighbor-support bonus contribution from w4 * neighbor_support.",
@@ -182,7 +186,7 @@ def _series_color_kwargs(metric_name: str, values: np.ndarray) -> dict[str, Any]
         return {
             "colorscale": "Viridis",
         }
-    if metric_name in {"reward_total", "expr_weighted", "expr_old_weighted", "candidate_compactness_gain"}:
+    if metric_name in {"reward_total", "expr_weighted", "expr_old_weighted", "shape_weighted", "candidate_compactness_gain"}:
         max_abs = float(max(np.max(np.abs(finite)), 1.0e-6))
         return {
             "colorscale": "RdBu",
@@ -714,9 +718,15 @@ def main() -> None:
     header_cols[3].metric("Replay Source", str(trace.replay_source), help=REPLAY_METRIC_HELP["Replay Source"])
     header_cols[4].metric("Replay Match", "yes" if trace.replay_matches_eval else "no", help=REPLAY_METRIC_HELP["Replay Match"])
     if not trace.replay_matches_eval:
-        st.warning(
-            "Replay does not exactly match eval row metrics. Re-run evaluate_ppo_checkpoint with saved step traces if you need exact one-to-one path replay."
-        )
+        if session.debug_summary.patch_pipeline is not None:
+            st.warning(
+                "Patch replay final assigned-bin count does not match the eval row for this cell. "
+                "Check that the checkpoint, patch index, and eval intermediate directory belong to the same run."
+            )
+        else:
+            st.warning(
+                "Replay does not exactly match eval row metrics. Re-run evaluate_ppo_checkpoint with saved step traces if you need exact one-to-one path replay."
+            )
 
     left_col, right_col = st.columns((3.6, 1.0), gap="medium")
 
@@ -742,6 +752,7 @@ def main() -> None:
                 "probability_rank",
                 "expr_weighted",
                 "expr_old_weighted",
+                "shape_weighted",
                 "distance_penalty",
                 "overlap_penalty",
                 "neighbor_bonus",
@@ -845,9 +856,9 @@ def main() -> None:
                 "frontier_add_reward_mean": state_summary["frontier_add_reward_mean"],
                 "frontier_add_reward_std": state_summary["frontier_add_reward_std"],
                 "frontier_add_reward_max": state_summary["frontier_add_reward_max"],
-                "seed_compactness": state_summary["seed_compactness"],
-                "seed_radius_p90_scaled": state_summary["seed_radius_p90_scaled"],
-                "seed_aspect_ratio_scaled": state_summary["seed_aspect_ratio_scaled"],
+                "seed_compactness": state_summary.get("seed_compactness", 0.0),
+                "seed_radius_p90_scaled": state_summary.get("seed_radius_p90_scaled", 0.0),
+                "seed_aspect_ratio_scaled": state_summary.get("seed_aspect_ratio_scaled", 0.0),
                 "value_estimate": state_summary["value_estimate"],
             },
         )
@@ -867,7 +878,18 @@ def main() -> None:
 
         if step_state.chosen_action == 0:
             st.markdown("**Greedy Action**")
-            st.info("Greedy policy chooses STOP at this step.")
+            if step_state.chosen_barcode and str(step_state.chosen_barcode).startswith("other_cell:"):
+                _, other_cell_id, other_barcode = str(step_state.chosen_barcode).split(":", 2)
+                st.info(
+                    f"Patch policy chooses ADD for another cell at this step: "
+                    f"cell={other_cell_id}, barcode={other_barcode}."
+                )
+                chosen_cols = st.columns(2)
+                chosen_cols[0].metric("chosen_prob", f"{step_state.chosen_action_probability:.4f}")
+                chosen_cols[1].metric("chosen_reward", f"{step_state.chosen_reward:.4f}")
+                chosen_cols[0].metric("chosen_logit", f"{step_state.chosen_action_logit:.4f}")
+            else:
+                st.info("Greedy policy chooses STOP at this step.")
         else:
             chosen_row = step_state.bin_table.loc[step_state.bin_table["bin_idx"] == (step_state.chosen_action - 1)].iloc[0]
             st.markdown("**Greedy Action**")
@@ -901,6 +923,9 @@ def main() -> None:
                     "expr_old_raw": float(chosen_row["expr_old_raw"]),
                     "expr_old_term": float(chosen_row["expr_old_term"]),
                     "w5_expr_old": float(chosen_row["expr_old_weighted"]),
+                    "shape_raw": float(chosen_row.get("shape_raw", 0.0)),
+                    "shape_term": float(chosen_row.get("shape_term", 0.0)),
+                    "w6_shape": float(chosen_row.get("shape_weighted", 0.0)),
                     "w2_p_dis": float(chosen_row["distance_penalty"]),
                     "w3_p_overlap": float(chosen_row["overlap_penalty"]),
                     "w4_neighbor": float(chosen_row["neighbor_bonus"]),
