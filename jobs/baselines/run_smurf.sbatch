@@ -7,12 +7,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=96
 #SBATCH --mem=241G
-#SBATCH --output=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL/logs/slurm/%x-%j.out
-#SBATCH --error=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL/logs/slurm/%x-%j.err
+#SBATCH --output=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/logs/slurm/%x-%j.out
+#SBATCH --error=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/logs/slurm/%x-%j.err
 
 set -euo pipefail
 
-WORK_DIR="/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL"
+WORK_DIR="/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL"
 PYTHON_BIN="$WORK_DIR/smurf/bin/python"
 cd "$WORK_DIR"
 

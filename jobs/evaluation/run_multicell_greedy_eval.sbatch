@@ -7,12 +7,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=48
 #SBATCH --mem=400G
-#SBATCH --output=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL/logs/slurm/%x-%j.out
-#SBATCH --error=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL/logs/slurm/%x-%j.err
+#SBATCH --output=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/logs/slurm/%x-%j.out
+#SBATCH --error=/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/logs/slurm/%x-%j.err
 
 set -euo pipefail
 
-WORK_DIR="/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL"
+WORK_DIR="/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL"
 cd "$WORK_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-$WORK_DIR/Bin2Cell_Validation/bin/python}"

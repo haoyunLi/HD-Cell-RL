@@ -54,6 +54,6 @@ For a clean future setup, create new environments outside the repository and poi
 
 - Historical files under `runs/` can contain absolute paths to configs, checkpoints, inputs, and episode indexes.
 - Local environments can contain absolute installation prefixes.
-- The Slurm launchers currently use the fixed project root `/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/RL`.
+- The Slurm launchers currently use the fixed project root `/taiga/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL`.
 
 Moving any of these requires an explicit migration and validation pass. They were intentionally left unchanged by the directory cleanup.
