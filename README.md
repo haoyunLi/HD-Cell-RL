@@ -5,6 +5,12 @@ Each step depends on outputs from earlier steps, so run in order unless you alre
 
 Repository roles and placement rules are documented in [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md). Slurm entry points are grouped by purpose in [`jobs/`](jobs/README.md), and scheduler output is written to `logs/slurm/`.
 
+## Live Patch Debugger
+
+**[Open the latest published patch evaluation](https://haoyunli.github.io/RL/)**
+
+The public site is a single latest-run snapshot from `gh-pages`. Source code remains on `main`, while each successful publication replaces the previous evaluation snapshot instead of accumulating generated runs in Git history.
+
 Current main training path:
 - Build episodes once.
 - Train with `jobs/training/run_ppo_training_full_grpo_cpu.sbatch`.
@@ -234,7 +240,7 @@ python scripts/publish_patch_debug_pages.py \
   --push
 ```
 
-Before the first publication, configure the repository's Pages source as `gh-pages` at `/ (root)` and make sure the batch environment can authenticate `git push` to `origin`. The deployed project URL is `https://haoyunLi.github.io/RL/`.
+Before the first publication, configure the repository's Pages source as `gh-pages` at `/ (root)` and make sure the batch environment can authenticate `git push` to `origin`. The deployed project URL is `https://haoyunli.github.io/RL/`.
 
 ## 12) Run Bin2Cell / SMURF / STCS baselines with PPO-aligned nuclei
 These method jobs are configured to use the same PPO-aligned nuclear bins instead of each tool's independent nuclear segmentation whenever possible. This keeps method comparison on the same nuclear seed level.
