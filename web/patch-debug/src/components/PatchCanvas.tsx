@@ -210,10 +210,12 @@ export function PatchCanvas({
       <div className="canvas-toolbar">
         <div className="canvas-title">
           <h2>{patch.patch_id}</h2>
-          <p>
-            {formatCompact(widthUm)} x {formatCompact(heightUm)} um · {patch.bin_size_um} um/bin ·{" "}
-            {patch.counts.core_cells} core cells · {patch.counts.display_bins} bins
-          </p>
+          <div className="canvas-meta">
+            <span className="bin-size-spec">Bin {patch.bin_size_um} um x {patch.bin_size_um} um</span>
+            <span>{formatCompact(widthUm)} x {formatCompact(heightUm)} um patch</span>
+            <span>{patch.counts.core_cells} core cells</span>
+            <span>{patch.counts.display_bins} visible bins</span>
+          </div>
         </div>
         <div className="canvas-kpis" aria-label="Patch summary">
           <span><small>Owner IoU</small>{formatMetric(patch.metrics.owner_micro_iou)}</span>
@@ -282,7 +284,7 @@ export function PatchCanvas({
             y={patch.outer_bounds.y_min}
             width={widthUm}
             height={heightUm}
-            fill="#161a19"
+            fill="#0d1210"
           />
 
           {patch.bins.map((bin) => {
@@ -308,7 +310,7 @@ export function PatchCanvas({
                 height={patch.bin_size_um}
                 fill={binFill(bin, currentOwner, category, mode, ownerColors)}
                 fillOpacity={muted ? 0.3 : fillOpacity}
-                stroke={bin.owner_conflict ? "#f1b44c" : "rgba(255,255,255,0.18)"}
+                stroke={bin.owner_conflict ? "#f0b45c" : "rgba(235,242,238,0.12)"}
                 strokeWidth={bin.owner_conflict ? 0.5 : 0.08}
                 vectorEffect="non-scaling-stroke"
                 shapeRendering="crispEdges"
@@ -369,7 +371,7 @@ export function PatchCanvas({
                     y1={segment.y1}
                     x2={segment.x2}
                     y2={segment.y2}
-                    stroke="#0d100f"
+                    stroke="#08100d"
                     strokeOpacity={opacity}
                     strokeWidth={4.2}
                     strokeLinecap="square"
@@ -382,7 +384,7 @@ export function PatchCanvas({
                     y1={segment.y1}
                     x2={segment.x2}
                     y2={segment.y2}
-                    stroke="#f7f6f1"
+                    stroke="#76a9ff"
                     strokeOpacity={opacity}
                     strokeWidth={1.65}
                     strokeLinecap="square"
@@ -406,8 +408,8 @@ export function PatchCanvas({
                       cx={cell.nucleus_center_xy_um[0]}
                       cy={cell.nucleus_center_xy_um[1]}
                       r={1.05}
-                      fill="#151918"
-                      stroke="#f8f7f2"
+                      fill="#f1f5f3"
+                      stroke="#0a0f0d"
                       strokeWidth={1.2}
                       vectorEffect="non-scaling-stroke"
                     />
@@ -453,7 +455,7 @@ export function PatchCanvas({
               width={patch.core_bounds.x_max - patch.core_bounds.x_min}
               height={patch.core_bounds.y_max - patch.core_bounds.y_min}
               fill="none"
-              stroke="#f7f6f1"
+              stroke="#76a9ff"
               strokeOpacity={0.75}
               strokeWidth={0.75}
               strokeDasharray="3 2"
@@ -469,9 +471,9 @@ export function PatchCanvas({
         </div>
         <div className="canvas-pan-status"><Move size={13} aria-hidden="true" /></div>
         <CanvasLegend mode={mode} />
-        <div className="scale-bar" aria-label={`${scaleBarUm} micrometer scale`}>
+        <div className="scale-bar" aria-label={`Physical scale: ${scaleBarUm} micrometers`}>
           <i style={{ width: `${scaleBarWidth}%` }} />
-          <span>{scaleBarUm} um</span>
+          <span>Scale {scaleBarUm} um</span>
         </div>
         {layersOpen ? (
           <LayerPanel

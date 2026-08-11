@@ -25,11 +25,11 @@ const OWNER_PALETTE = [
 
 export const OVERLAP_COLORS: Record<OverlapCategory, string> = {
   correct_owner: "#2fa89a",
-  wrong_owner: "#e2a23d",
-  unmatched_owner: "#9c78bf",
-  pred_only: "#df655b",
-  gt_only: "#5d86c7",
-  unscored: "#343938",
+  wrong_owner: "#f0b45c",
+  unmatched_owner: "#b78ad6",
+  pred_only: "#ff7b71",
+  gt_only: "#76a9ff",
+  unscored: "#303a36",
 };
 
 export function ownerColorMap(ownerIds: string[]): Map<string, string> {
@@ -68,7 +68,7 @@ export function patchOwnerColorMap(patch: PatchPayload | null): Map<string, stri
 
 export function ownerColor(owner: string | null, colors: Map<string, string>): string {
   if (owner === null) {
-    return "#343938";
+    return "#303a36";
   }
-  return colors.get(owner) ?? "#7e8985";
+  return colors.get(owner) ?? "#87958e";
 }

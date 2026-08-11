@@ -176,8 +176,8 @@ export default function App() {
             <span />
           </span>
           <div>
-            <h1>Patch assignment</h1>
-            <p>{selectedPatchId ?? "Loading patch"}</p>
+            <h1>HD Cell RL</h1>
+            <p>Patch assignment debugger · {selectedPatchId ?? "Loading patch"}</p>
           </div>
         </div>
 
