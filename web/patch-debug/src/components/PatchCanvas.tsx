@@ -4,6 +4,7 @@ import {
   Move,
   Plus,
   RotateCcw,
+  ScanSearch,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -22,7 +23,9 @@ import {
 } from "../geometry";
 import { dynamicOverlapCategory } from "../trajectory";
 import type {
+  ActionFocusMode,
   Bounds,
+  DebugJumpKind,
   OverlapCategory,
   PatchBin,
   PatchCell,
@@ -30,6 +33,7 @@ import type {
   PatchTrajectory,
   PatchTrajectoryAction,
   PatchTrajectoryStep,
+  StepStateMode,
   ViewMode,
 } from "../types";
 import { TrajectoryControls } from "./TrajectoryControls";
@@ -45,6 +49,9 @@ type Props = {
   currentOwners: Map<string, string>;
   trajectory: PatchTrajectory;
   currentStep: PatchTrajectoryStep | null;
+  actionFocusMode: ActionFocusMode;
+  stepStateMode: StepStateMode;
+  availableDebugJumps: Set<DebugJumpKind>;
   stepIndex: number;
   playing: boolean;
   playbackRate: number;
@@ -54,6 +61,9 @@ type Props = {
   showCoreBounds: boolean;
   onSelectCell: (cellId: string | null) => void;
   onSelectBin: (barcode: string | null, ownerId?: string | null) => void;
+  onActionFocusModeChange: (mode: ActionFocusMode) => void;
+  onStepStateModeChange: (mode: StepStateMode) => void;
+  onDebugJump: (kind: DebugJumpKind) => void;
   onStepChange: (stepIndex: number) => void;
   onPlayingChange: (playing: boolean) => void;
   onPlaybackRateChange: (rate: number) => void;
@@ -81,6 +91,9 @@ export function PatchCanvas({
   currentOwners,
   trajectory,
   currentStep,
+  actionFocusMode,
+  stepStateMode,
+  availableDebugJumps,
   stepIndex,
   playing,
   playbackRate,
@@ -90,6 +103,9 @@ export function PatchCanvas({
   showCoreBounds,
   onSelectCell,
   onSelectBin,
+  onActionFocusModeChange,
+  onStepStateModeChange,
+  onDebugJump,
   onStepChange,
   onPlayingChange,
   onPlaybackRateChange,
@@ -132,10 +148,47 @@ export function PatchCanvas({
     () => buildOwnerOutlineSegments(patch.bins, "gt_owner_cell_id", patch.bin_size_um),
     [patch],
   );
-  const currentActions = currentStep?.actions ?? [];
+  const currentActions = currentStep?.actions ?? EMPTY_ACTIONS;
+  const visibleActions = useMemo(() => {
+    if (actionFocusMode === "step") {
+      return currentActions;
+    }
+    if (actionFocusMode === "cell") {
+      if (selectedCell === null) {
+        return EMPTY_ACTIONS;
+      }
+      return currentActions.filter(
+        (action) =>
+          action.cell_id === selectedCell.cell_id || action.old_cell_id === selectedCell.cell_id,
+      );
+    }
+    if (selectedBinBarcode === null) {
+      return EMPTY_ACTIONS;
+    }
+    return currentActions.filter((action) => action.barcode === selectedBinBarcode);
+  }, [actionFocusMode, currentActions, selectedBinBarcode, selectedCell]);
   const actionByBarcode = useMemo(
     () => new Map(currentActions.map((action) => [action.barcode, action])),
     [currentActions],
+  );
+  const visibleActionByBarcode = useMemo(
+    () => new Map(visibleActions.map((action) => [action.barcode, action])),
+    [visibleActions],
+  );
+  const changedBarcodes = useMemo(
+    () => new Set(currentActions.map((action) => action.barcode)),
+    [currentActions],
+  );
+  const focusedCellIds = useMemo(
+    () =>
+      new Set(
+        visibleActions.flatMap((action) =>
+          action.old_cell_id === null
+            ? [action.cell_id]
+            : [action.cell_id, action.old_cell_id],
+        ),
+      ),
+    [visibleActions],
   );
   const binsByBarcode = useMemo(
     () => new Map(patch.bins.map((bin) => [bin.barcode, bin])),
@@ -207,7 +260,7 @@ export function PatchCanvas({
   const scaleBarWidth = Math.min(44, Math.max(12, (scaleBarUm / viewBox.width) * 100));
 
   return (
-    <section className="canvas-region">
+    <section className={trajectory.available ? "canvas-region has-debug-toolbar" : "canvas-region"}>
       <div className="canvas-toolbar">
         <div className="canvas-title">
           <h2>{patch.patch_id}</h2>
@@ -249,6 +302,20 @@ export function PatchCanvas({
           </button>
         </div>
       </div>
+
+      {trajectory.available ? (
+        <DebugToolbar
+          actionFocusMode={actionFocusMode}
+          stepStateMode={stepStateMode}
+          hasStep={currentStep !== null}
+          hasSelectedCell={selectedCell !== null}
+          hasSelectedBin={selectedBinBarcode !== null}
+          availableDebugJumps={availableDebugJumps}
+          onActionFocusModeChange={onActionFocusModeChange}
+          onStepStateModeChange={onStepStateModeChange}
+          onDebugJump={onDebugJump}
+        />
+      ) : null}
 
       <div className={dragStart === null ? "patch-canvas" : "patch-canvas dragging"}>
         <svg
@@ -292,8 +359,13 @@ export function PatchCanvas({
             const currentOwner = currentOwners.get(bin.barcode) ?? null;
             const category = dynamicOverlapCategory(bin, currentOwner, matchedGtByOwner);
             const inSelectedCell = isSelectedBin(bin, currentOwner, selectedCell);
-            const muted = selectedCell !== null && !inSelectedCell;
+            const focusMuted = selectedCell !== null && !inSelectedCell;
+            const changeMuted =
+              stepStateMode === "changes" &&
+              currentStep !== null &&
+              !changedBarcodes.has(bin.barcode);
             const action = actionByBarcode.get(bin.barcode) ?? null;
+            const visibleAction = visibleActionByBarcode.get(bin.barcode) ?? null;
             const selected = selectedBinBarcode === bin.barcode;
             const fillOpacity =
               mode === "gt" && bin.gt_owner_cell_id === null
@@ -304,13 +376,13 @@ export function PatchCanvas({
             return (
               <rect
                 key={bin.barcode}
-                className={`bin-tile${selected ? " selected" : ""}${action === null ? "" : ` action-${action.applied ? action.type : "rollback"}`}`}
+                className={`bin-tile${selected ? " selected" : ""}${changeMuted ? " change-muted" : ""}${visibleAction === null ? "" : ` action-${visibleAction.applied ? visibleAction.type : "rollback"}`}`}
                 x={bin.x_um - half}
                 y={bin.y_um - half}
                 width={patch.bin_size_um}
                 height={patch.bin_size_um}
                 fill={binFill(bin, currentOwner, category, mode, ownerColors)}
-                fillOpacity={muted ? 0.3 : fillOpacity}
+                fillOpacity={changeMuted ? 0.12 : focusMuted ? 0.3 : fillOpacity}
                 stroke={bin.owner_conflict ? "#f0b45c" : "rgba(235,242,238,0.12)"}
                 strokeWidth={bin.owner_conflict ? 0.5 : 0.08}
                 vectorEffect="non-scaling-stroke"
@@ -353,7 +425,15 @@ export function PatchCanvas({
                   x2={segment.x2}
                   y2={segment.y2}
                   stroke={ownerColor(segment.owner, ownerColors)}
-                  strokeOpacity={selectedCell === null || segment.owner === selectedCell.cell_id ? 1 : 0.3}
+                  strokeOpacity={
+                    stepStateMode === "changes"
+                      ? focusedCellIds.has(segment.owner)
+                        ? 0.9
+                        : 0.14
+                      : selectedCell === null || segment.owner === selectedCell.cell_id
+                        ? 1
+                        : 0.3
+                  }
                   strokeWidth={0.72}
                   vectorEffect="non-scaling-stroke"
                   pointerEvents="none"
@@ -364,7 +444,11 @@ export function PatchCanvas({
           {showGtOutlines
             ? gtSegments.flatMap((segment) => {
                 const opacity =
-                  selectedCell === null || segment.owner === selectedCell.matched_gt_cell_id ? 1 : 0.3;
+                  stepStateMode === "changes"
+                    ? 0.18
+                    : selectedCell === null || segment.owner === selectedCell.matched_gt_cell_id
+                      ? 1
+                      : 0.3;
                 return [
                   <line
                     key={`gt-halo:${segment.key}`}
@@ -402,7 +486,15 @@ export function PatchCanvas({
                   <g
                     key={`nucleus:${cell.cell_id}`}
                     className="nucleus-marker"
-                    opacity={selectedCell === null || selectedCell.cell_id === cell.cell_id ? 1 : 0.3}
+                    opacity={
+                      stepStateMode === "changes"
+                        ? focusedCellIds.has(cell.cell_id)
+                          ? 1
+                          : 0.2
+                        : selectedCell === null || selectedCell.cell_id === cell.cell_id
+                          ? 1
+                          : 0.3
+                    }
                     pointerEvents="none"
                   >
                     <circle
@@ -426,7 +518,7 @@ export function PatchCanvas({
             : null}
 
           <g key={`trace:${stepIndex}`} className="trace-layer">
-            {currentActions.map((action, index) => {
+            {visibleActions.map((action, index) => {
               const bin = binsByBarcode.get(action.barcode);
               if (bin === undefined) {
                 return null;
@@ -439,7 +531,7 @@ export function PatchCanvas({
                   binSizeUm={patch.bin_size_um}
                   ownerColors={ownerColors}
                   cellsById={cellsById}
-                  emphasized={selectedBinBarcode === null || selectedBinBarcode === action.barcode}
+                  emphasized
                   actionIndex={index}
                 />
               );
@@ -468,7 +560,13 @@ export function PatchCanvas({
         </svg>
 
         <div className="canvas-step-status">
-          <strong>{trajectory.available ? (stepIndex === 0 ? "Initial" : `Step ${stepIndex}`) : "Final"}</strong>
+          <strong>
+            {trajectory.available
+              ? stepIndex === 0
+                ? "Initial"
+                : `Step ${stepIndex} · ${stepStateMode}`
+              : "Final"}
+          </strong>
           <span>{currentStep?.outcome?.replaceAll("_", " ") ?? (trajectory.available ? "seed state" : "saved assignment")}</span>
         </div>
         <div className="canvas-pan-status"><Move size={13} aria-hidden="true" /></div>
@@ -502,6 +600,106 @@ export function PatchCanvas({
         onPlaybackRateChange={onPlaybackRateChange}
       />
     </section>
+  );
+}
+
+const EMPTY_ACTIONS: PatchTrajectoryAction[] = [];
+
+const DEBUG_JUMP_OPTIONS: Array<{ value: DebugJumpKind; label: string }> = [
+  { value: "largest_reward_drop", label: "Largest reward drop" },
+  { value: "largest_reward_gain", label: "Largest reward gain" },
+  { value: "first_rollback", label: "First rollback" },
+  { value: "first_wrong_replace", label: "First wrong replacement" },
+  { value: "most_actions", label: "Most actions in one step" },
+  { value: "most_overgrown_cell", label: "Most overgrown cell" },
+  { value: "most_undersegmented_cell", label: "Most undersegmented cell" },
+  { value: "lowest_iou_cell", label: "Lowest-IoU cell" },
+];
+
+function DebugToolbar({
+  actionFocusMode,
+  stepStateMode,
+  hasStep,
+  hasSelectedCell,
+  hasSelectedBin,
+  availableDebugJumps,
+  onActionFocusModeChange,
+  onStepStateModeChange,
+  onDebugJump,
+}: {
+  actionFocusMode: ActionFocusMode;
+  stepStateMode: StepStateMode;
+  hasStep: boolean;
+  hasSelectedCell: boolean;
+  hasSelectedBin: boolean;
+  availableDebugJumps: Set<DebugJumpKind>;
+  onActionFocusModeChange: (mode: ActionFocusMode) => void;
+  onStepStateModeChange: (mode: StepStateMode) => void;
+  onDebugJump: (kind: DebugJumpKind) => void;
+}) {
+  return (
+    <div className="debug-toolbar" aria-label="Trajectory inspection controls">
+      <div className="debug-control-group">
+        <span>State</span>
+        <div className="debug-segmented">
+          {(["before", "after", "changes"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={stepStateMode === mode ? "active" : ""}
+              aria-pressed={stepStateMode === mode}
+              disabled={!hasStep && mode !== "after"}
+              onClick={() => onStepStateModeChange(mode)}
+            >
+              {mode[0].toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="debug-control-group">
+        <span>Actions</span>
+        <div className="debug-segmented">
+          {(["selected", "cell", "step"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={actionFocusMode === mode ? "active" : ""}
+              aria-pressed={actionFocusMode === mode}
+              disabled={
+                !hasStep ||
+                (mode === "selected" && !hasSelectedBin) ||
+                (mode === "cell" && !hasSelectedCell)
+              }
+              onClick={() => onActionFocusModeChange(mode)}
+            >
+              {mode[0].toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <label className="debug-jump-select">
+        <ScanSearch size={15} aria-hidden="true" />
+        <span className="sr-only">Jump to debug event</span>
+        <select
+          value=""
+          aria-label="Jump to debug event"
+          onChange={(event) => onDebugJump(event.target.value as DebugJumpKind)}
+        >
+          <option value="">Jump to issue...</option>
+          {DEBUG_JUMP_OPTIONS.map((option) => (
+            <option
+              key={option.value}
+              value={option.value}
+              disabled={!availableDebugJumps.has(option.value)}
+            >
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
   );
 }
 

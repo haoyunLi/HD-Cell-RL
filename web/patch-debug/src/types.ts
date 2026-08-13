@@ -155,3 +155,17 @@ export type PatchPayload = {
 };
 
 export type ViewMode = "assignment" | "overlap" | "gt";
+
+export type ActionFocusMode = "selected" | "cell" | "step";
+
+export type StepStateMode = "before" | "after" | "changes";
+
+export type DebugJumpKind =
+  | "largest_reward_drop"
+  | "largest_reward_gain"
+  | "first_rollback"
+  | "first_wrong_replace"
+  | "most_actions"
+  | "most_overgrown_cell"
+  | "most_undersegmented_cell"
+  | "lowest_iou_cell";
