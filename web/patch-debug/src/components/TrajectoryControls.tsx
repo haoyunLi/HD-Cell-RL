@@ -67,7 +67,7 @@ export function TrajectoryControls({
   const playheadX = maxStep > 0 ? (stepIndex / maxStep) * TIMELINE_WIDTH : 0;
 
   return (
-    <section className="trajectory-panel" aria-label="Rollout trajectory">
+    <section className={playing ? "trajectory-panel playing" : "trajectory-panel"} aria-label="Rollout trajectory">
       <div className="trajectory-heading">
         <div>
           <h3>Trajectory</h3>

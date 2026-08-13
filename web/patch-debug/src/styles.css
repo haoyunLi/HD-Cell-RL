@@ -3626,3 +3626,219 @@ body,
     display: none;
   }
 }
+
+/* Trajectory motion clarity */
+.trace-action-highlight {
+  opacity: 1;
+}
+
+.trace-action-highlight.muted {
+  opacity: 0.56;
+}
+
+.owner-transfer-halo {
+  stroke: #07100d;
+  stroke-width: 5.8px;
+  stroke-linecap: round;
+  stroke-opacity: 0.88;
+}
+
+.owner-transfer-halo.old {
+  stroke-width: 4.8px;
+  stroke-opacity: 0.68;
+}
+
+.owner-transfer {
+  stroke-width: 2.7px;
+  stroke-linecap: round;
+  stroke-dasharray: 7 4;
+  filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.32));
+  animation: transferReveal 360ms ease-out, transferFlow 760ms linear 360ms infinite;
+  animation-delay: var(--trace-delay), calc(var(--trace-delay) + 360ms);
+}
+
+.owner-transfer.old {
+  stroke-width: 2.1px;
+  stroke-dasharray: 3 4;
+  stroke-opacity: 0.74;
+  animation: oldTransferFade 1.15s ease-out both;
+  animation-delay: var(--trace-delay);
+}
+
+.owner-transfer.new {
+  stroke-opacity: 1;
+}
+
+.owner-transfer.rejected {
+  stroke-width: 2.8px;
+  stroke-dasharray: 3 3;
+  stroke-opacity: 1;
+  animation: transferReveal 260ms ease-out, rejectedTransfer 520ms ease-in-out 260ms infinite alternate;
+  animation-delay: var(--trace-delay), calc(var(--trace-delay) + 260ms);
+}
+
+.trace-action-ring {
+  stroke-width: 3.2px;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.28));
+  animation: actionRingClarity 920ms ease-out;
+  animation-delay: var(--trace-delay);
+}
+
+.trace-action-ring.replace {
+  transform: rotate(45deg);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.trace-action-ring.rejected {
+  stroke-width: 3.2px;
+  stroke-dasharray: 4 2;
+  animation: rejectedRingClarity 560ms ease-in-out infinite alternate;
+  animation-delay: var(--trace-delay);
+}
+
+.trace-origin-pulse,
+.trace-destination-pulse {
+  stroke-width: 2.2px;
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.trace-origin-pulse {
+  animation: originPulse 1.25s ease-out infinite;
+  animation-delay: var(--trace-delay);
+}
+
+.trace-destination-pulse.add {
+  stroke: var(--add);
+  animation: destinationPulse 1.05s ease-out infinite;
+  animation-delay: var(--trace-delay);
+}
+
+.trace-destination-pulse.replace {
+  stroke: var(--replace);
+  stroke-dasharray: 3 2;
+  animation: destinationPulse 1.05s ease-out infinite;
+  animation-delay: calc(var(--trace-delay) + 120ms);
+}
+
+.trace-destination-pulse.rejected {
+  stroke: var(--rollback);
+  stroke-dasharray: 2 2;
+  animation: rejectedDestination 560ms ease-in-out infinite alternate;
+  animation-delay: var(--trace-delay);
+}
+
+.action-event {
+  animation: actionEventReveal 300ms ease-out both;
+}
+
+.selected-bin-marker rect,
+.selected-bin-marker line {
+  stroke-width: 2.2px;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.72));
+  animation: selectedBinPulse 1.2s ease-in-out infinite alternate;
+}
+
+.canvas-legend .legend-transfer {
+  width: 14px;
+  height: 0;
+  border: 0;
+  border-top: 2px dashed #63ddcd;
+}
+
+.trajectory-panel.playing .trajectory-current-event strong {
+  color: #8cf0e3;
+  text-shadow: 0 0 8px rgba(66, 201, 184, 0.5);
+}
+
+.trajectory-panel.playing .timeline-playhead {
+  stroke-width: 2px;
+  filter: drop-shadow(0 0 4px rgba(66, 201, 184, 0.9));
+}
+
+.trajectory-panel.playing .timeline-playhead-handle {
+  animation: playheadPulse 720ms ease-in-out infinite alternate;
+}
+
+@keyframes transferReveal {
+  from { stroke-dashoffset: 54; stroke-opacity: 0; }
+  to { stroke-dashoffset: 0; stroke-opacity: 1; }
+}
+
+@keyframes transferFlow {
+  to { stroke-dashoffset: -22; }
+}
+
+@keyframes oldTransferFade {
+  0% { stroke-opacity: 1; }
+  72% { stroke-opacity: 0.72; }
+  100% { stroke-opacity: 0.48; }
+}
+
+@keyframes rejectedTransfer {
+  from { stroke-opacity: 0.48; }
+  to { stroke-opacity: 1; }
+}
+
+@keyframes actionRingClarity {
+  0% { stroke-width: 6px; stroke-opacity: 1; }
+  62% { stroke-width: 4px; stroke-opacity: 1; }
+  100% { stroke-width: 3.2px; stroke-opacity: 0.94; }
+}
+
+@keyframes rejectedRingClarity {
+  from { stroke-width: 2.6px; stroke-opacity: 0.58; }
+  to { stroke-width: 4px; stroke-opacity: 1; }
+}
+
+@keyframes originPulse {
+  0% { opacity: 0.95; transform: scale(0.55); }
+  72% { opacity: 0.18; transform: scale(1.55); }
+  100% { opacity: 0; transform: scale(1.7); }
+}
+
+@keyframes destinationPulse {
+  0% { opacity: 1; transform: scale(0.7); }
+  74% { opacity: 0.2; transform: scale(1.55); }
+  100% { opacity: 0; transform: scale(1.7); }
+}
+
+@keyframes rejectedDestination {
+  from { opacity: 0.45; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1.18); }
+}
+
+@keyframes selectedBinPulse {
+  from { stroke-opacity: 0.68; }
+  to { stroke-opacity: 1; }
+}
+
+@keyframes playheadPulse {
+  from { r: 3.7px; opacity: 0.78; }
+  to { r: 5.2px; opacity: 1; }
+}
+
+@keyframes actionEventReveal {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owner-transfer,
+  .trace-action-ring,
+  .trace-origin-pulse,
+  .trace-destination-pulse,
+  .action-event,
+  .selected-bin-marker rect,
+  .selected-bin-marker line,
+  .trajectory-panel.playing .timeline-playhead-handle {
+    animation: none !important;
+  }
+
+  .trace-origin-pulse,
+  .trace-destination-pulse {
+    opacity: 0.8;
+  }
+}

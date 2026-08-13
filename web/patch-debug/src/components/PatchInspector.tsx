@@ -252,10 +252,11 @@ function StepSection({
           ) : (
             currentStep.actions.map((action, index) => (
               <ActionEventRow
-                key={`${action.barcode}:${action.cell_id}:${index}`}
+                key={`${stepIndex}:${action.barcode}:${action.cell_id}:${index}`}
                 action={action}
                 ownerColors={ownerColors}
                 onClick={() => onSelectAction(action)}
+                revealDelayMs={Math.min(index, 12) * 28}
               />
             ))
           )}
@@ -406,14 +407,21 @@ function ActionEventRow({
   action,
   ownerColors,
   onClick,
+  revealDelayMs,
 }: {
   action: PatchTrajectoryAction;
   ownerColors: Map<string, string>;
   onClick: () => void;
+  revealDelayMs: number;
 }) {
   const replace = action.type === "replace";
   return (
-    <button className={`action-event ${action.applied ? action.type : "rollback"}`} type="button" onClick={onClick}>
+    <button
+      className={`action-event ${action.applied ? action.type : "rollback"}`}
+      style={{ animationDelay: `${revealDelayMs}ms` }}
+      type="button"
+      onClick={onClick}
+    >
       <span className="action-event-icon" aria-hidden="true">{replace ? <RefreshCw size={13} /> : <Plus size={14} />}</span>
       <span className="action-event-main">
         <span><strong>{action.applied ? action.type.toUpperCase() : "ROLLBACK"}</strong><code>{action.barcode}</code></span>

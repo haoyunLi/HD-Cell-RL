@@ -6,6 +6,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type PointerEvent,
   type WheelEvent,
   useEffect,
@@ -271,8 +272,8 @@ export function PatchCanvas({
           }}
         >
           <defs>
-            <marker id="trace-add-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0L8 4L0 8Z" fill="context-stroke" />
+            <marker id="trace-add-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M0.8 0.8L9.2 5L0.8 9.2Z" fill="context-stroke" stroke="#07100d" strokeWidth="1.4" paintOrder="stroke" />
             </marker>
             <filter id="selected-bin-glow" x="-80%" y="-80%" width="260%" height="260%">
               <feGaussianBlur stdDeviation="0.6" result="blur" />
@@ -439,6 +440,7 @@ export function PatchCanvas({
                   ownerColors={ownerColors}
                   cellsById={cellsById}
                   emphasized={selectedBinBarcode === null || selectedBinBarcode === action.barcode}
+                  actionIndex={index}
                 />
               );
             })}
@@ -510,6 +512,7 @@ function ActionHighlight({
   ownerColors,
   cellsById,
   emphasized,
+  actionIndex,
 }: {
   action: PatchTrajectoryAction;
   bin: PatchBin;
@@ -517,6 +520,7 @@ function ActionHighlight({
   ownerColors: Map<string, string>;
   cellsById: Map<string, PatchCell>;
   emphasized: boolean;
+  actionIndex: number;
 }) {
   const inset = binSizeUm * 0.2;
   const newCenter = cellsById.get(action.cell_id)?.nucleus_center_xy_um ?? null;
@@ -524,36 +528,70 @@ function ActionHighlight({
     action.old_cell_id === null
       ? null
       : (cellsById.get(action.old_cell_id)?.nucleus_center_xy_um ?? null);
-  const className = action.applied
+  const tone = action.applied
     ? action.type === "replace"
-      ? "trace-action-ring replace"
-      : "trace-action-ring add"
-    : "trace-action-ring rejected";
+      ? "replace"
+      : "add"
+    : "rejected";
+  const targetColor = action.applied ? ownerColor(action.cell_id, ownerColors) : "#ff7b71";
 
   return (
-    <g className={emphasized ? "trace-action-highlight" : "trace-action-highlight muted"} pointerEvents="none">
+    <g
+      className={emphasized ? "trace-action-highlight" : "trace-action-highlight muted"}
+      style={{ "--trace-delay": `${Math.min(actionIndex, 20) * 24}ms` } as CSSProperties}
+      pointerEvents="none"
+    >
       {action.type === "replace" && oldCenter !== null ? (
-        <line
-          className="owner-transfer old"
-          x1={oldCenter[0]}
-          y1={oldCenter[1]}
-          x2={bin.x_um}
-          y2={bin.y_um}
-          stroke={ownerColor(action.old_cell_id, ownerColors)}
-          vectorEffect="non-scaling-stroke"
-        />
+        <>
+          <line
+            className="owner-transfer-halo old"
+            x1={oldCenter[0]}
+            y1={oldCenter[1]}
+            x2={bin.x_um}
+            y2={bin.y_um}
+            vectorEffect="non-scaling-stroke"
+          />
+          <line
+            className="owner-transfer old"
+            x1={oldCenter[0]}
+            y1={oldCenter[1]}
+            x2={bin.x_um}
+            y2={bin.y_um}
+            stroke={ownerColor(action.old_cell_id, ownerColors)}
+            vectorEffect="non-scaling-stroke"
+          />
+        </>
       ) : null}
       {newCenter !== null ? (
-        <line
-          className={action.applied ? "owner-transfer new" : "owner-transfer rejected"}
-          x1={newCenter[0]}
-          y1={newCenter[1]}
-          x2={bin.x_um}
-          y2={bin.y_um}
-          stroke={action.applied ? ownerColor(action.cell_id, ownerColors) : "#ef6257"}
-          markerEnd="url(#trace-add-arrow)"
-          vectorEffect="non-scaling-stroke"
-        />
+        <>
+          <line
+            className="owner-transfer-halo new"
+            x1={newCenter[0]}
+            y1={newCenter[1]}
+            x2={bin.x_um}
+            y2={bin.y_um}
+            vectorEffect="non-scaling-stroke"
+          />
+          <line
+            className={action.applied ? "owner-transfer new" : "owner-transfer rejected"}
+            x1={newCenter[0]}
+            y1={newCenter[1]}
+            x2={bin.x_um}
+            y2={bin.y_um}
+            stroke={targetColor}
+            markerEnd="url(#trace-add-arrow)"
+            vectorEffect="non-scaling-stroke"
+          />
+          <circle
+            className={`trace-origin-pulse ${tone}`}
+            cx={newCenter[0]}
+            cy={newCenter[1]}
+            r={binSizeUm * 0.72}
+            fill="none"
+            stroke={targetColor}
+            vectorEffect="non-scaling-stroke"
+          />
+        </>
       ) : null}
       {action.type === "replace" && action.old_cell_id !== null ? (
         <rect
@@ -566,11 +604,19 @@ function ActionHighlight({
         />
       ) : null}
       <rect
-        className={className}
+        className={`trace-action-ring ${tone}`}
         x={bin.x_um - binSizeUm / 2 - inset}
         y={bin.y_um - binSizeUm / 2 - inset}
         width={binSizeUm + inset * 2}
         height={binSizeUm + inset * 2}
+        fill="none"
+        vectorEffect="non-scaling-stroke"
+      />
+      <circle
+        className={`trace-destination-pulse ${tone}`}
+        cx={bin.x_um}
+        cy={bin.y_um}
+        r={binSizeUm * 0.88}
         fill="none"
         vectorEffect="non-scaling-stroke"
       />
@@ -641,6 +687,7 @@ function CanvasLegend({ mode }: { mode: ViewMode }) {
       <span><i className="legend-add" />ADD</span>
       <span><i className="legend-replace" />REPLACE</span>
       <span><i className="legend-rollback" />Rollback</span>
+      <span><i className="legend-transfer" />Cell → bin</span>
       <span><i className="legend-gt-outline" />GT outline</span>
     </div>
   );
