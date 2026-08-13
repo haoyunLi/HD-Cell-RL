@@ -32,7 +32,7 @@ export default function App() {
   const [showGtOutlines, setShowGtOutlines] = useState(true);
   const [showNuclei, setShowNuclei] = useState(true);
   const [showCoreBounds, setShowCoreBounds] = useState(false);
-  const [actionFocusMode, setActionFocusMode] = useState<ActionFocusMode>("selected");
+  const [actionFocusMode, setActionFocusMode] = useState<ActionFocusMode>("step");
   const [stepStateMode, setStepStateMode] = useState<StepStateMode>("after");
   const [stepIndex, setStepIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -82,7 +82,7 @@ export default function App() {
           setSelectedBinBarcode(null);
           setStepIndex(0);
           setPlaying(false);
-          setActionFocusMode("selected");
+          setActionFocusMode("step");
           setStepStateMode("after");
           setError(null);
         }
@@ -198,7 +198,9 @@ export default function App() {
     setSelectedCellId(target.cellId ?? null);
     setSelectedBinBarcode(target.barcode ?? null);
     setStepStateMode("changes");
-    setActionFocusMode(target.barcode !== undefined ? "selected" : "cell");
+    if (target.barcode === undefined) {
+      setActionFocusMode("cell");
+    }
   };
 
   if (error !== null && manifest === null) {

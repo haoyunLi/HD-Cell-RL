@@ -1,4 +1,5 @@
 import {
+  CircleHelp,
   Layers3,
   Minus,
   Move,
@@ -149,24 +150,30 @@ export function PatchCanvas({
     [patch],
   );
   const currentActions = currentStep?.actions ?? EMPTY_ACTIONS;
-  const visibleActions = useMemo(() => {
-    if (actionFocusMode === "step") {
-      return currentActions;
-    }
-    if (actionFocusMode === "cell") {
-      if (selectedCell === null) {
-        return EMPTY_ACTIONS;
-      }
-      return currentActions.filter(
-        (action) =>
-          action.cell_id === selectedCell.cell_id || action.old_cell_id === selectedCell.cell_id,
-      );
-    }
-    if (selectedBinBarcode === null) {
-      return EMPTY_ACTIONS;
-    }
-    return currentActions.filter((action) => action.barcode === selectedBinBarcode);
-  }, [actionFocusMode, currentActions, selectedBinBarcode, selectedCell]);
+  const actionsByFocus = useMemo(
+    () => ({
+      selected:
+        selectedBinBarcode === null
+          ? EMPTY_ACTIONS
+          : currentActions.filter((action) => action.barcode === selectedBinBarcode),
+      cell:
+        selectedCell === null
+          ? EMPTY_ACTIONS
+          : currentActions.filter(
+              (action) =>
+                action.cell_id === selectedCell.cell_id ||
+                action.old_cell_id === selectedCell.cell_id,
+            ),
+      step: currentActions,
+    }),
+    [currentActions, selectedBinBarcode, selectedCell],
+  );
+  const visibleActions = actionsByFocus[actionFocusMode];
+  const actionCounts = {
+    selected: actionsByFocus.selected.length,
+    cell: actionsByFocus.cell.length,
+    step: actionsByFocus.step.length,
+  };
   const actionByBarcode = useMemo(
     () => new Map(currentActions.map((action) => [action.barcode, action])),
     [currentActions],
@@ -310,6 +317,7 @@ export function PatchCanvas({
           hasStep={currentStep !== null}
           hasSelectedCell={selectedCell !== null}
           hasSelectedBin={selectedBinBarcode !== null}
+          actionCounts={actionCounts}
           availableDebugJumps={availableDebugJumps}
           onActionFocusModeChange={onActionFocusModeChange}
           onStepStateModeChange={onStepStateModeChange}
@@ -622,6 +630,7 @@ function DebugToolbar({
   hasStep,
   hasSelectedCell,
   hasSelectedBin,
+  actionCounts,
   availableDebugJumps,
   onActionFocusModeChange,
   onStepStateModeChange,
@@ -632,11 +641,13 @@ function DebugToolbar({
   hasStep: boolean;
   hasSelectedCell: boolean;
   hasSelectedBin: boolean;
+  actionCounts: Record<ActionFocusMode, number>;
   availableDebugJumps: Set<DebugJumpKind>;
   onActionFocusModeChange: (mode: ActionFocusMode) => void;
   onStepStateModeChange: (mode: StepStateMode) => void;
   onDebugJump: (kind: DebugJumpKind) => void;
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
     <div className="debug-toolbar" aria-label="Trajectory inspection controls">
       <div className="debug-control-group">
@@ -648,6 +659,7 @@ function DebugToolbar({
               type="button"
               className={stepStateMode === mode ? "active" : ""}
               aria-pressed={stepStateMode === mode}
+              title={STATE_MODE_HELP[mode]}
               disabled={!hasStep && mode !== "after"}
               onClick={() => onStepStateModeChange(mode)}
             >
@@ -658,14 +670,15 @@ function DebugToolbar({
       </div>
 
       <div className="debug-control-group">
-        <span>Actions</span>
-        <div className="debug-segmented">
+        <span>Focus</span>
+        <div className="debug-segmented action-focus-segmented">
           {(["selected", "cell", "step"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
               className={actionFocusMode === mode ? "active" : ""}
               aria-pressed={actionFocusMode === mode}
+              title={ACTION_FOCUS_HELP[mode]}
               disabled={
                 !hasStep ||
                 (mode === "selected" && !hasSelectedBin) ||
@@ -673,33 +686,98 @@ function DebugToolbar({
               }
               onClick={() => onActionFocusModeChange(mode)}
             >
-              {mode[0].toUpperCase() + mode.slice(1)}
+              <span>{ACTION_FOCUS_LABELS[mode]}</span>
+              <b>{actionCounts[mode]}</b>
             </button>
           ))}
         </div>
       </div>
 
-      <label className="debug-jump-select">
-        <ScanSearch size={15} aria-hidden="true" />
-        <span className="sr-only">Jump to debug event</span>
-        <select
-          value=""
-          aria-label="Jump to debug event"
-          onChange={(event) => onDebugJump(event.target.value as DebugJumpKind)}
+      <div className="debug-toolbar-tools">
+        <label
+          className="debug-jump-select"
+          title="Jump directly to a reward, rollback, replacement, or cell-quality issue"
         >
-          <option value="">Jump to issue...</option>
-          {DEBUG_JUMP_OPTIONS.map((option) => (
-            <option
-              key={option.value}
-              value={option.value}
-              disabled={!availableDebugJumps.has(option.value)}
-            >
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          <ScanSearch size={15} aria-hidden="true" />
+          <span className="sr-only">Jump to debug event</span>
+          <select
+            value=""
+            aria-label="Jump to debug event"
+            onChange={(event) => onDebugJump(event.target.value as DebugJumpKind)}
+          >
+            <option value="">Jump to issue...</option>
+            {DEBUG_JUMP_OPTIONS.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={!availableDebugJumps.has(option.value)}
+              >
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className={helpOpen ? "debug-help-button active" : "debug-help-button"}
+          type="button"
+          aria-label="Explain trajectory controls"
+          aria-expanded={helpOpen}
+          aria-controls="trajectory-control-help"
+          title="Explain these controls"
+          onClick={() => setHelpOpen((value) => !value)}
+        >
+          <CircleHelp size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      {helpOpen ? <TrajectoryControlHelp /> : null}
     </div>
+  );
+}
+
+const STATE_MODE_HELP: Record<StepStateMode, string> = {
+  before: "Show ownership immediately before the current step",
+  after: "Show ownership after applied actions in the current step",
+  changes: "Show the after state while dimming bins unchanged by the current step",
+};
+
+const ACTION_FOCUS_LABELS: Record<ActionFocusMode, string> = {
+  selected: "Bin",
+  cell: "Cell",
+  step: "Step",
+};
+
+const ACTION_FOCUS_HELP: Record<ActionFocusMode, string> = {
+  selected: "Show only the current step action for the selected bin",
+  cell: "Show current step actions where the selected cell gains or loses a bin",
+  step: "Show every action in the current patch step",
+};
+
+function TrajectoryControlHelp() {
+  return (
+    <aside
+      id="trajectory-control-help"
+      className="debug-help-popover"
+      aria-label="Trajectory control guide"
+    >
+      <section>
+        <strong>Map state</strong>
+        <dl>
+          <div><dt>Before</dt><dd>Ownership before this step runs.</dd></div>
+          <div><dt>After</dt><dd>Ownership after applied actions.</dd></div>
+          <div><dt>Changes</dt><dd>After state with unchanged bins dimmed.</dd></div>
+        </dl>
+      </section>
+      <section>
+        <strong>Action focus</strong>
+        <dl>
+          <div><dt>Bin</dt><dd>Only the selected bin's action.</dd></div>
+          <div><dt>Cell</dt><dd>Actions where the selected cell gains or loses a bin.</dd></div>
+          <div><dt>Step</dt><dd>All actions in the current step.</dd></div>
+        </dl>
+      </section>
+      <p>The number beside each focus button is the number of action paths currently available in that scope.</p>
+    </aside>
   );
 }
 
