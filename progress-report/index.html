@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="HD-Cell-RL progress report: reconstructing physical cells from Visium HD 2 micrometre bins." />
+  <title>HD-Cell-RL — Progress report</title>
+  <link rel="stylesheet" href="vendor/reveal.css" />
+<link rel="stylesheet" href="styles.css?v=20260901-17" />
+</head>
+<body>
+<div class="reveal"><div class="slides">
+
+  <section class="slide title-slide" data-background-color="#ffffff">
+    <img class="cover-tissue" src="assets/colorectal_tissue.png" alt="Colorectal H&amp;E tissue section" />
+    <div class="cover-shade"></div>
+    <div class="cover-content">
+      <p class="eyebrow light">Progress report · August 2026</p>
+      <h1>From 2 µm bins<br />to physical cells</h1>
+    </div>
+    <aside class="notes">Open with the biological question: which physical cell owns each measured 2 µm barcode?</aside>
+  </section>
+
+  <section class="slide light-slide microscopy-slide">
+    <div class="slide-kicker"><span>01</span> Why Visium HD?</div>
+    <h2>What is Visium HD?</h2>
+    <div class="visium-explainer">
+      <figure class="micrograph-card visium-field">
+        <img src="assets/visium-microscopic-grid.png" alt="Microscopic colorectal H&amp;E field with a two-micrometre bin grid" />
+        <div class="he-callout"><b>H&amp;E morphology</b><span>cells and tissue structure</span></div>
+        <div class="bin-focus"><i></i></div>
+        <div class="bin-magnifier"><div class="magnified-grid"><i></i><i></i><i></i><i></i><i></i><i class="selected"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><b>one 2 × 2 µm barcode</b><span>location + UMI count vector</span></div>
+        <div class="count-vector"><i style="--h:24%"></i><i style="--h:70%"></i><i style="--h:42%"></i><i style="--h:88%"></i><span>gene counts</span></div>
+        <figcaption><b>One aligned measurement field</b><span>H&amp;E image + spatial barcode grid + RNA counts</span></figcaption>
+        <div class="micro-scale"><i></i><span>10 µm</span></div>
+      </figure>
+      <div class="platform-comparisons">
+        <article class="fragment fade-up"><div class="compare-number"><strong>2 µm</strong><span>vs 55 µm</span></div><div><b>Finer than regular Visium</b><p>Small squares preserve crowded boundaries that one conventional spot would mix.</p></div></article>
+        <article class="fragment fade-up"><div class="compare-number"><strong>18,132</strong><span>vs targeted 5K</span></div><div><b>Broader than Xenium Prime panels</b><p>This project keeps transcriptome-scale discovery rather than preselecting only a targeted panel.</p></div></article>
+        <article class="fragment fade-up"><div class="compare-number image-compare"><strong>H&amp;E</strong><span>+ RNA</span></div><div><b>Spatial context retained</b><p>Unlike dissociated scRNA-seq, every expression vector remains registered to tissue morphology.</p></div></article>
+        <div class="visium-tradeoff"><b>Takeaway</b><span>Visium HD preserves fine spatial sampling, broad expression, and morphology—but it still does not provide ready-made physical cells.</span></div>
+      </div>
+    </div>
+    <p class="source">10x Genomics: Visium HD uses a continuous lawn of 2 × 2 µm barcoded squares; regular Visium uses 55 µm spots; Xenium Prime uses targeted 5K panels. The microscopic field is a scale-aware schematic.</p>
+    <aside class="notes">Follow the three arrows on the image: morphology, one physical barcode, and its gene-count vector. Then compare HD with conventional Visium, Xenium, and dissociated scRNA-seq.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>02</span> Measurement unit ≠ biological unit</div>
+    <h2>Why not stop at 2, 8, or 16 µm square bins?</h2>
+    <div class="bin-scale-comparison">
+      <article class="scale-card scale-2 fragment fade-up"><div class="scale-scene"><i class="scale-cell a"></i><i class="scale-cell b"></i><i class="scale-nucleus na"></i><i class="scale-nucleus nb"></i><span class="aggregate-box"></span><em class="umi-label u1">0</em><em class="umi-label u2">1</em><em class="umi-label u3">2</em></div><div class="scale-card-copy"><b>2 µm · native</b><strong>Fine but sparse</strong><span>One cell is fragmented across many mostly empty squares.</span></div></article>
+      <article class="scale-card scale-8 fragment fade-up"><div class="scale-scene"><i class="scale-cell a"></i><i class="scale-cell b"></i><i class="scale-nucleus na"></i><i class="scale-nucleus nb"></i><span class="aggregate-box"><small>16 ×<br />2 µm bins</small></span></div><div class="scale-card-copy"><b>8 µm · default summary</b><strong>More signal, mixed edge</strong><span>About 16× more transcripts on average, but a fixed square can cross two cells.</span></div></article>
+      <article class="scale-card scale-16 fragment fade-up"><div class="scale-scene"><i class="scale-cell a"></i><i class="scale-cell b"></i><i class="scale-cell c"></i><i class="scale-nucleus na"></i><i class="scale-nucleus nb"></i><i class="scale-nucleus nc"></i><span class="aggregate-box"><small>64 native<br />squares</small></span></div><div class="scale-card-copy"><b>16 µm · coarser</b><strong>Dense but multi-cell</strong><span>Higher counts come by merging several nearby physical cells.</span></div></article>
+      <div class="scale-to-cell">→</div>
+      <article class="scale-card cell-shaped-card fragment fade-up"><div class="scale-scene"><i class="reconstructed-cell a"></i><i class="reconstructed-cell b"></i><i class="reconstructed-nucleus na"></i><i class="reconstructed-nucleus nb"></i><span class="owner-label oa">cell A</span><span class="owner-label ob">cell B</span></div><div class="scale-card-copy"><b>Our target · cell-shaped</b><strong>Aggregate by biology</strong><span>Use nuclei and molecular evidence to follow variable cell boundaries.</span></div></article>
+    </div>
+    <div class="bin-scale-takeaway"><div><b>Larger squares solve sparsity</b><span>but increase boundary mixing and scale-dependent bias.</span></div><div><b>Cell reconstruction changes the shape</b><span>from a fixed square to one physical, nucleus-anchored cell.</span></div></div>
+    <p class="source inverse-source">Space Ranger outputs native 2 µm plus 8 and 16 µm bins; 10x reports ~16× more transcripts in an 8 µm bin than a 2 µm square and cautions about scale effects.</p>
+    <aside class="notes">Move left to right. Binning improves signal-to-noise but never makes a square equal a cell; the target is adaptive, cell-shaped aggregation.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>03</span> Reconstruction goal</div>
+    <h2>Reassemble measurements into one physical-cell profile</h2>
+    <div class="reconstruction-flow">
+      <div class="recon-panel"><div class="recon-grid"><i class="a"></i><i class="a"></i><i></i><i class="b"></i><i class="b"></i><i class="a"></i><i class="a"></i><i class="mix"></i><i class="b"></i><i class="b"></i><i></i><i class="a"></i><i class="mix"></i><i class="b"></i><i></i></div><b>bin-level counts</b><span>sparse + boundary ambiguous</span></div>
+      <div class="recon-arrow fragment">→</div>
+      <div class="recon-panel cell-profile-panel fragment fade-up"><div class="paired-cells"><i class="cell-teal"></i><i class="cell-pink"></i></div><div class="profile-bars"><i></i><i></i><i></i><i></i><i></i></div><b>cell-level profiles</b><span>one expression vector per physical cell</span></div>
+      <div class="recon-arrow fragment">→</div>
+      <div class="downstream-list fragment fade-up"><div><i>01</i><b>Cell annotation</b></div><div><i>02</i><b>Differential expression</b></div><div><i>03</i><b>Cell–cell communication</b></div><div><i>04</i><b>Morphology + expression</b></div></div>
+    </div>
+    <p class="takeaway wide-takeaway"><span>Target object</span>A unique physical barcode owner for the final segmentation, while uncertainty is retained during inference.</p>
+    <aside class="notes">Cell reconstruction changes the statistical unit used for cell annotation, differential expression, and cell–cell communication analysis.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>04</span> The molecular-ownership challenge</div>
+    <h2>A plausible boundary can still assign the wrong RNA</h2>
+    <div class="challenge-sequence">
+      <div class="challenge-cell"><div class="shape-a"></div><div class="shape-b"></div><i class="rna-dot d1"></i><i class="rna-dot d2"></i><i class="rna-dot d3"></i><i class="rna-dot d4"></i><i class="rna-dot d5"></i><span>image boundary</span></div><div class="challenge-arrow">→</div><div class="ownership-question"><b>?</b><span>Which cell generated this boundary RNA?</span></div><div class="challenge-arrow">→</div><div class="propagation-list"><div>mixed profiles</div><i>→</i><div>biased cell types</div><i>→</i><div>false neighborhoods</div></div>
+    </div>
+    <div class="challenge-grid condensed"><article><h3>Sparse signal</h3><p>Low-count bins weaken evidence.</p></article><article><h3>Displacement</h3><p>Diffusion and spillover move RNA.</p></article><article><h3>3D → 2D overlap</h3><p>Several cells project into one plane.</p></article><article><h3>Complex shape</h3><p>Nucleus-centered growth is approximate.</p></article></div>
+    <p class="source inverse-source">Ishaque et al., “The Challenge of Cell Segmentation in Spatially Resolved Transcriptomics,” arXiv:2606.09675 (2026).</p>
+    <aside class="notes">This is the biological problem after reconstruction is defined: masks constrain morphology, while this project infers molecular ownership.</aside>
+  </section>
+
+  <section class="slide light-slide overview-slide">
+    <div class="slide-kicker"><span>05</span> Building evaluable data</div>
+    <h2>Simulation overview: image → cells → molecules → 2 µm bins</h2>
+    <div class="overview-chain">
+      <div class="overview-step fragment"><span>1</span><b>Segment nuclei</b><small>real H&amp;E</small></div><i>→</i>
+      <div class="overview-step fragment"><span>2</span><b>Assign cell types</b><small>STHD + scRNA</small></div><i>→</i>
+      <div class="overview-step fragment"><span>3</span><b>Grow cell masks</b><small>type-aware size</small></div><i>→</i>
+      <div class="overview-step fragment"><span>4</span><b>Generate expression</b><small>scDesign3</small></div><i>→</i>
+      <div class="overview-step fragment"><span>5</span><b>Place molecules</b><small>3 compartments</small></div><i>→</i>
+      <div class="overview-step fragment"><span>6</span><b>Re-bin</b><small>native barcodes</small></div>
+    </div>
+    <figure class="concept-strip"><img src="assets/simulation-overview.jpg" alt="Conceptual simulation workflow" /><figcaption>Conceptual map; the next slides show the actual implementation and outputs.</figcaption></figure>
+    <aside class="notes">Use this only as a roadmap for the simulation section.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>06</span> Simulation step 1</div>
+    <h2>Start from physical nuclei in the colorectal H&amp;E</h2>
+    <div class="image-copy-layout">
+      <figure class="real-output-card"><img src="assets/nuclear_segmentation.jpg" alt="StarDist nuclear segmentation" /><figcaption>Actual StarDist output overlay</figcaption></figure>
+      <div class="process-copy">
+        <div class="process-badge">StarDist · 2D_versatile_he</div>
+        <ol class="plain-steps">
+          <li class="fragment"><b>Tile the whole image</b><span>with overlap and context to avoid seams.</span></li>
+          <li class="fragment"><b>Predict nuclear instances</b><span>using probability 0.60 and NMS 0.30.</span></li>
+          <li class="fragment"><b>Filter implausible objects</b><span>retain tissue nuclei with area 5–400 µm².</span></li>
+        </ol>
+        <div class="metric-pair"><div><strong>170,252</strong><span>raw nuclei</span></div><div><strong>167,509</strong><span>retained nuclei</span></div></div>
+        <p class="mini-note">The nuclear mask becomes the immutable physical seed for every later step.</p>
+      </div>
+    </div>
+    <aside class="notes">Nuclei are the strongest physical anchors and remain protected later.</aside>
+  </section>
+
+  <section class="slide dark-slide sthd-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>07</span> Simulation step 2</div>
+    <h2>Use real spatial signal to assign a type to each nucleus</h2>
+    <div class="sthd-layout">
+      <div class="sthd-scene">
+        <div class="sthd-map-heading"><b>8 µm STHD posterior grid</b><span>physical nuclei overlaid on complete cell-type vectors</span></div>
+        <div class="sthd-parent-grid" aria-label="Four by four grid of 8 micrometre STHD bins with several physical nuclei and one selected parent bin"><i></i><i></i><i></i><i></i><i></i><i class="selected-parent"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <i class="context-nucleus context-nucleus-a" aria-hidden="true"></i>
+        <i class="context-nucleus context-nucleus-b" aria-hidden="true"></i>
+        <i class="context-nucleus context-nucleus-c" aria-hidden="true"></i>
+        <i class="context-nucleus context-nucleus-d" aria-hidden="true"></i>
+        <div class="mapped-nucleus"><span>selected<br />nucleus</span></div>
+        <div class="parent-bin-label"><b>Each nucleus is mapped independently</b><span>selected nucleus → highlighted 8 µm parent bin</span></div>
+        <div class="sthd-map-arrow">→</div>
+        <div class="nucleus-posterior-card fragment fade-up">
+          <small>nucleus #80,653 · posterior used for annotation</small>
+          <div class="posterior-summary-row"><span>TA</span><i style="--p:69.5%"></i><b>0.695</b></div>
+          <div class="posterior-summary-row"><span>Goblet</span><i style="--p:28.5%"></i><b>0.285</b></div>
+          <div class="posterior-summary-row"><span>Immature Goblet</span><i style="--p:2%"></i><b>0.020</b></div>
+          <div class="posterior-decision"><span>compare the full vector</span><b>annotation → TA</b></div>
+        </div>
+        <div class="multi-parent-note"><b>If a nucleus crosses multiple 8 µm bins:</b><span>average the complete posteriors mapped from all nuclear 2 µm centers.</span></div>
+      </div>
+      <div class="process-copy inverse-copy">
+        <div class="process-badge teal-badge">STHD + colorectal scRNA reference</div>
+        <ol class="plain-steps">
+          <li class="fragment"><b>Deconvolve real 8 µm bins</b><span>into complete posteriors over eligible cell types.</span></li>
+          <li class="fragment"><b>Map each nucleus onto the grid</b><span>each nuclear 2 µm center inherits its parent 8 µm posterior vector.</span></li>
+          <li class="fragment"><b>Average complete vectors</b><span>then assign the cell type with the highest mean posterior.</span></li>
+        </ol>
+        <div class="metric-pair dark-metrics"><div><strong>36</strong><span>final cell types</span></div><div><strong>3</strong><span>nearest-bin fallbacks</span></div></div>
+        <p class="mini-note inverse-note">No single value is a threshold. The example at left is an observed posterior vector from the current dataset.</p>
+      </div>
+    </div>
+    <aside class="notes">Several nuclei are shown to make the tissue-level mapping clear; each one is processed independently. The selected nucleus lies on the 8-micrometre STHD grid, and its nuclear 2-micrometre centers inherit the posterior from their parent 8-micrometre bin. The highlighted square shows the simple one-parent-bin case. If a nucleus crosses several 8-micrometre bins, the implementation averages their complete posterior vectors. A value such as 0.48 never determines a cell type by itself. The worked output is real nucleus 80,653: twelve nuclear sample centers yield TA 0.695, Goblet 0.285, and Immature Goblet 0.020.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>08</span> Simulation step 3</div>
+    <h2>Cell type sets a plausible whole-cell size target</h2>
+    <div class="area-prior-layout">
+      <div class="area-cells"><div class="area-cell epithelial"><i></i><b>Epithelial</b><span>nucleus ≈ 14–30% of cell area</span></div><div class="area-cell fibro"><i></i><b>Fibroblast</b><span>nucleus ≈ 8–16%</span></div><div class="area-cell immune"><i></i><b>T / B cell</b><span>nucleus ≈ 50–75%</span></div></div>
+      <div class="area-explain"><div class="rule-card fragment"><span>measured nucleus area</span><b>→</b><span>type-specific nucleus / cell ratio</span><b>→</b><span>target whole-cell area</span></div><p class="lead small-lead">A fibroblast and a lymphocyte with similar nuclei should not be expanded to the same size.</p><p class="caution-box">These are reproducible benchmark priors—not universal biological constants.</p></div>
+    </div>
+    <aside class="notes">Measured nucleus size plus the expected nucleus-to-cell ratio gives a target area.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>09</span> Simulation step 4</div>
+    <h2>One retained nucleus anchors one cell region</h2>
+    <div class="growth-layout">
+      <div class="growth-stage"><div class="growth-grid"></div><div class="grow-cell gc1 seed-only"><i></i><span>A</span></div><div class="grow-cell gc2 seed-only"><i></i><span>B</span></div><div class="grow-cell gc3 seed-only"><i></i><span>C</span></div><div class="growth-wave wave1 fragment"></div><div class="growth-wave wave2 fragment"></div><div class="competition-line fragment"></div><div class="blocked-label fragment">blocked by neighbors</div><div class="distance-label">candidate cell fronts compete · fixed nuclear seeds cannot be crossed</div></div>
+      <div class="growth-rules"><article class="fragment"><span>1</span><b>One nucleus anchors one cell</b><small>every retained nuclear pixel keeps its own cell ID</small></article><article class="fragment"><span>2</span><b>Rank pixels by distance</b><small>exact nearest retained nucleus</small></article><article class="fragment"><span>3</span><b>Respect cell capacity</b><small>stop at target area or 25 µm</small></article><article class="fragment"><span>4</span><b>Resolve image-pixel ownership</b><small>each H&amp;E pixel receives one cell ID</small></article><div class="growth-bin-note"><b>Exclusive pixels ≠ pure barcodes</b><span>694,393 assigned 2 µm bins (14.0%) still cross multiple cell regions and have fractional GT owners.</span></div></div>
+    </div>
+    <aside class="notes">Each retained nucleus initializes exactly one cell ID. Nuclear pixels never change owner, so a growing cell cannot cross or absorb another retained nucleus. Candidate fronts compete for non-nuclear image pixels, and each image pixel receives one cell label. This does not remove barcode-level overlap: a two-micrometre barcode has area and can cross two adjacent cell regions. In the current multi-owner mapping, 694,393 assigned bins, or 13.95 percent, have multiple fractional ground-truth owners.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>10</span> Expansion output</div>
+    <h2>Whole-cell masks are plausible, but crowding still matters</h2>
+    <div class="before-after-output">
+      <figure class="zoom-roi"><img src="assets/nuclear_segmentation_cell_roi.png?v=20260901-4" alt="High-resolution H&amp;E crop with nuclear boundaries in magenta" /><span class="roi-tag">same cell-level field</span><figcaption>nuclear seeds · magenta</figcaption></figure><div class="image-arrow">→</div><figure class="zoom-roi"><img src="assets/expanded_cell_mask_cell_roi.png?v=20260901-4" alt="The same high-resolution H&amp;E crop with expanded cell boundaries in cyan" /><span class="roi-tag">same cell-level field</span><figcaption>expanded whole-cell masks · cyan</figcaption></figure>
+      <div class="qc-stack"><div><strong>115,179</strong><span>reached target area</span></div><div><strong>52,330</strong><span>blocked by crowding</span></div><div><strong>138,282</strong><span>ratios within reference range</span></div><div><strong>0</strong><span>shared image pixels; mixed 2 µm bins remain</span></div></div>
+    </div>
+    <p class="consequence-band">The simulator records “blocked” cells instead of silently expanding through their neighbors.</p>
+    <aside class="notes">These are high-resolution matched views of the exact same 192-micrometre field. Magenta marks nuclear seeds on the left. The right panel retains the nuclei and adds the expanded whole-cell boundary in high-contrast cyan. Both panels include a calibrated 20-micrometre scale bar.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>11</span> Simulation step 5</div>
+    <h2>Measure physical overlap inside every 2 µm barcode</h2>
+    <div class="subbin-layout">
+      <div class="subbin-stage"><div class="subbin-cell sub-a"></div><div class="subbin-cell sub-b"></div><div class="physical-bin"><i class="a fragment"></i><i class="a fragment"></i><i class="a fragment"></i><i class="a fragment"></i><i class="a fragment"></i><i class="b fragment"></i><i class="a fragment"></i><i class="b fragment"></i><i class="b fragment"></i></div><span class="sample-caption">9 sub-bin samples</span></div>
+      <div class="fraction-readout"><div class="fraction-bar"><i class="fraction-a"></i><i class="fraction-b"></i></div><p><b>Cell A</b><strong>6 / 9</strong></p><p><b>Cell B</b><strong>3 / 9</strong></p><div class="fraction-rule">one physical barcode → multiple fractional GT owners</div></div>
+      <div class="subbin-copy"><article><b>Coverage fraction</b><span>how much of the square belongs to each cell</span></article><article><b>Compartment fraction</b><span>nucleus, cytoplasm, or membrane</span></article><article><b>Physical identity</b><span>barcode stored once, not duplicated per cell</span></article></div>
+    </div>
+    <aside class="notes">This is where multi-owner ground truth is created without duplicating a barcode.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>12</span> Simulation step 6</div>
+    <h2>Generate one unique expression profile per physical cell</h2>
+    <div class="scdesign-layout">
+      <div class="sc-source"><div class="sc-cloud"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><b>37,777 real scRNA cells</b><span>fit cell-type-specific distributions</span></div>
+      <div class="model-box fragment"><span>scDesign3</span><b>fit count distributions and gene dependence</b><small>type-conditioned negative-binomial marginals + Gaussian copula; each physical cell receives an independent count draw</small></div>
+      <div class="synthetic-profiles fragment fade-up"><div class="profile-card"><i></i><i></i><i></i><i></i></div><div class="profile-card"><i></i><i></i><i></i><i></i></div><div class="profile-card"><i></i><i></i><i></i><i></i></div><b>167,509 synthetic profiles</b><span>one-to-one with physical cells</span></div>
+    </div>
+    <div class="three-facts"><div><b>36</b><span>cell types</span></div><div><b>21,854</b><span>reference genes</span></div><div><b>0</b><span>real cells assigned directly</span></div></div>
+    <p class="source">Current limitation: generator and inference reference still share a parent cohort; donor-independent splitting is required for the next realism-matched benchmark.</p>
+    <aside class="notes">The first two mini-plots show the negative-binomial marginal model: cell type changes a gene's mean, while fitted dispersion preserves within-type variation. The third shows the Gaussian copula, which preserves dependence between genes. scDesign3 then draws a new count vector independently for every physical cell; no real cell profile is copied into ground truth.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>13</span> Simulation step 7</div>
+    <h2>Split each cell’s molecules into biological compartments</h2>
+    <div class="compartment-layout">
+      <div class="compartment-cell"><div class="membrane-ring"></div><div class="cytoplasm-zone"></div><div class="nucleus-zone"></div><div class="compartment-rna nuclear-rna fragment"><i></i><i></i><i></i><i></i><i></i></div><div class="compartment-rna cyto-rna fragment"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="compartment-rna membrane-rna fragment"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="comp-label nucleus-label">nucleus · 5 / 20</span><span class="comp-label cyto-label">cytoplasm · 8 / 20</span><span class="comp-label membrane-label">membrane · 7 / 20</span></div>
+      <div class="gene-routing"><article class="fragment"><b>1 · Nuclear draw</b><span>For each gene, intron/exon evidence sets its nuclear probability; a binomial draw splits nuclear molecules.</span></article><article class="fragment"><b>2 · Boundary routing</b><span>Among the remainder, membrane and secretory genes receive extra probability at the boundary band.</span></article><article class="fragment"><b>3 · Cytoplasm remainder</b><span>Unrouted molecules stay in the non-nuclear cell interior, with cell-level variation between same-type cells.</span></article><article class="fragment placement-rule"><b>4 · Compartment-specific spatial kernels</b><div class="kernel-strip"><div><i class="kernel-icon nuclear-kernel"></i><strong>Nuclear</strong><span>center-biased</span></div><div><i class="kernel-icon cyto-kernel"></i><strong>Cytoplasm</strong><span>normal interior</span></div><div><i class="kernel-icon membrane-kernel"></i><strong>Membrane</strong><span>reverse → edge</span></div></div></article></div>
+      <div class="compartment-meter"><p>Observed output split</p><div class="meter nuclear-meter" style="--share:24.985%"><b>25.0%</b><span>nuclear</span></div><div class="meter cyto-meter" style="--share:40.169%"><b>40.2%</b><span>cytoplasm</span></div><div class="meter membrane-meter" style="--share:34.846%"><b>34.8%</b><span>membrane</span></div></div>
+    </div>
+    <aside class="notes">Walk left to right: gene-specific nuclear split, boundary routing for membrane and secretory genes, cytoplasmic remainder, then three spatial kernels. Nuclear molecules are pulled toward the nuclear center; cytoplasmic molecules use the normal interior kernel; the membrane kernel reverses that radial preference so molecules accumulate near the cell boundary. The 20 dots mirror the observed 25/40/35 percent output split.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>14</span> Simulation step 8</div>
+    <h2>Place molecules, then return to native Visium HD barcodes</h2>
+    <div class="aggregate-layout">
+      <div class="aggregate-cell"><div class="aggregate-outline"></div><div class="aggregate-nucleus"></div><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span>cell-local molecule positions</span></div>
+      <div class="aggregate-arrow fragment">→</div>
+      <div class="aggregate-grid fragment fade-up"><i data-n="0"></i><i data-n="1"></i><i data-n="0"></i><i data-n="2"></i><i data-n="1"></i><i data-n="1"></i><i data-n="4"></i><i data-n="3"></i><i data-n="2"></i><i data-n="0"></i><i data-n="0"></i><i data-n="2"></i><i data-n="5"></i><i data-n="1"></i><i data-n="0"></i><i data-n="0"></i><i data-n="1"></i><i data-n="2"></i><i data-n="0"></i><i data-n="0"></i><span>gene × barcode count matrix</span></div>
+      <div class="aggregate-arrow fragment">→</div>
+      <div class="output-stack fragment fade-up"><div><b>original barcodes</b><span>same physical grid</span></div><div><b>18,132 features</b><span>Visium output space</span></div><div><b>971.2M molecules</b><span>on-panel counts</span></div><div><b>count conservation</b><span>passed</span></div></div>
+    </div>
+    <p class="takeaway wide-takeaway"><span>Why this matters</span>Every molecule has a known source cell, but inference receives only the re-aggregated 2 µm count matrix and nuclei.</p>
+    <aside class="notes">Source identities are retained only for evaluation, never inference.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>15</span> Evaluation truth</div>
+    <h2>Ground truth may be fractional; final ownership is unique</h2>
+    <div class="ownership-compare">
+      <div class="ownership-side"><h3>Physical barcode composition</h3><div class="shared-square"><i class="share-a"></i><i class="share-b"></i><span>one barcode</span></div><div class="shared-readout"><b>A 0.58</b><b>B 0.42</b></div><p>A square can cover more than one true mask.</p></div>
+      <div class="ownership-middle">evaluation<br />≠<br />inference state</div>
+      <div class="ownership-side"><h3>HD-Cell-RL final state</h3><div class="hard-square"><span>owner A</span></div><div class="shared-readout"><b>one barcode</b><b>one cell_id</b></div><p>RL stays discrete and globally unique.</p></div>
+    </div>
+    <div class="hero-metrics compact-metrics"><div><strong>4.98M</strong><span>assigned bins</span></div><div><strong>694k</strong><span>multi-owner bins</span></div><div><strong>13.95%</strong><span>assigned bins shared</span></div><div><strong>≤ 5</strong><span>owners per barcode</span></div></div>
+    <aside class="notes">All seven method outputs are audited for one unique owner per physical barcode.</aside>
+  </section>
+
+  <section class="slide light-slide architecture-slide">
+    <div class="slide-kicker"><span>16</span> HD-Cell-RL</div>
+    <h2>Probabilistic assignment first; discrete refinement second</h2>
+    <div class="architecture-flow">
+      <div class="architecture-node seed-node"><span>01</span><strong>Confident nuclei</strong><small>locked physical anchors</small></div><div class="flow-arrow">→</div>
+      <div class="architecture-node em-node"><span>02</span><strong>Generalized EM</strong><small>soft P(bin → cell)</small><em>E ↔ M across the full patch</em></div><div class="flow-arrow">→</div>
+      <div class="architecture-node entropy-node"><span>03</span><strong>Normalized entropy</strong><small>ambiguity from the full distribution</small></div><div class="flow-arrow">→</div>
+      <div class="architecture-node rl-node"><span>04</span><strong>Patch RL</strong><small>discrete REPLACE on eligible bins</small><em>global objective after − before</em></div><div class="flow-arrow">→</div>
+      <div class="architecture-node output-node"><span>05</span><strong>Final cells</strong><small>unique owner per barcode</small></div>
+    </div>
+    <div class="architecture-details"><div><b>20 µm candidate MaxDis</b><span>all nuclei in range; no nearest-3</span></div><div><b>Core + margin competition</b><span>patch edges retain valid owners</span></div><div><b>scRNA expression reference</b><span>shared bin-to-type likelihood</span></div><div><b>No EM reward bonus</b><span>initialization + masking only</span></div></div>
+    <aside class="notes">The next slides zoom into EM, the global objective, and the RL update loop.</aside>
+  </section>
+
+  <section class="slide light-slide em-detail-slide">
+    <div class="slide-kicker"><span>17</span> Generalized EM</div>
+    <h2>All valid cells compete softly before any hard decision</h2>
+    <div class="em-detail-layout">
+      <div class="candidate-stage"><div class="radius-ring"></div><div class="query-bin">b</div><div class="candidate-nucleus cn1">A</div><div class="candidate-nucleus cn2">B</div><div class="candidate-nucleus cn3">C</div><div class="candidate-nucleus cn4">D</div><div class="candidate-nucleus cn5">E</div><div class="candidate-nucleus outside">F</div><span class="radius-label">all nuclei ≤ 20 µm</span><span class="outside-label">outside MaxDis</span></div>
+      <div class="em-loop"><div class="em-loop-arrow top-arrow">→</div><div class="em-loop-arrow bottom-arrow">←</div><article class="e-step fragment current-visible"><span>E-step</span><b>Update every bin together</b><small>distance + expression compatibility</small></article><article class="m-step fragment current-visible"><span>M-step</span><b>Update every cell together</b><small>soft bins rebuild type posterior</small></article><div class="batch-note">same cell posteriors for the whole E-step</div></div>
+      <div class="posterior-stage"><div class="soft-bar"><i class="sa"><b>A</b><span>0.52</span></i><i class="sb"><b>B</b><span>0.44</span></i><i class="sc"><b>C</b><span>0.04</span></i></div><div class="entropy-scale"><i></i><span>low uncertainty</span><span>high uncertainty</span></div><div class="posterior-caption"><b>one responsibility vector</b><span>for this physical barcode</span></div></div>
+    </div>
+    <div class="em-rules"><div class="fragment"><b>Locked nuclei</b><span>exact one-hot anchors</span></div><div class="fragment"><b>Batch updates</b><span>no per-bin mutation</span></div><div class="fragment"><b>Normalized entropy</b><span>only ambiguity gate</span></div><div class="fragment"><b>Top-1 hardening</b><span>initializes RL</span></div></div>
+    <p class="source">Generalized EM / alternating probabilistic soft assignment—not claimed as an exact finite-mixture maximum-likelihood model.</p>
+    <aside class="notes">Candidate construction, synchronized E/M updates, then full ownership distribution and entropy. No nearest-3 rule.</aside>
+  </section>
+
+  <section class="slide light-slide reward-intro-slide">
+    <div class="slide-kicker"><span>18</span> RL objective</div>
+    <h2>Each reward term asks a different biological question</h2>
+    <div class="reward-intro-grid">
+      <article class="reward-concept positive fragment"><small>+ w1 · new expression confidence</small><div class="reward-visual posterior-visual"><div><i></i><i></i><i></i></div><em>→</em><div class="sharper"><i></i><i></i><i></i></div></div><div class="reward-copy"><b>Does the cell identity become clearer?</b><span>Reward a bin when adding it makes the cell-type posterior more confident.</span></div></article>
+      <article class="reward-concept positive fragment"><small>+ w5 · existing-posterior compatibility</small><div class="reward-visual compatibility-visual"><div class="compat-cell">A</div><div class="compat-bin"><i></i><i></i><i></i></div><strong>✓</strong></div><div class="reward-copy"><b>Does this bin look like this cell?</b><span>Reward expression whose likelihood agrees with the cell’s current type posterior.</span></div></article>
+      <article class="reward-concept penalty fragment"><small>− w2 · nucleus distance</small><div class="reward-visual distance-visual"><i class="reward-nucleus">N</i><span></span><b class="near-bin"></b><b class="far-bin"></b></div><div class="reward-copy"><b>Is the bin physically close enough?</b><span>Penalize ownership progressively as the bin moves farther from its nucleus.</span></div></article>
+      <article class="reward-concept penalty fragment"><small>− w3 · overlap / competing nucleus</small><div class="reward-visual competition-visual"><i class="reward-nucleus nucleus-a">A</i><i class="reward-nucleus nucleus-b">B</i><b></b><span class="line-a"></span><span class="line-b"></span></div><div class="reward-copy"><b>Is another nucleus a better geometric owner?</b><span>Penalize Cell A when the candidate bin is closer to another nucleus than to A.</span></div></article>
+      <article class="reward-concept positive fragment"><small>+ w4 · neighbor support</small><div class="reward-visual neighbor-visual"><i></i><i class="on"></i><i></i><i class="on"></i><i class="target">+</i><i class="on"></i><i></i><i class="on"></i><i></i></div><div class="reward-copy"><b>Does the assignment stay connected?</b><span>Reward a bin that touches more of the cell’s already assigned 8-neighbors.</span></div></article>
+      <article class="reward-concept positive fragment"><small>+ λshape · morphology prior</small><div class="reward-visual shape-visual"><i class="rough-shape"></i><em>→</em><i class="reference-shape"></i></div><div class="reward-copy"><b>Does the reconstructed cell remain plausible?</b><span>Favor reference-like area, compactness, solidity, and anisotropy.</span></div></article>
+    </div>
+    <div class="reward-delta-band"><b>One REPLACE action changes the whole patch:</b><span>reward = J<sub>after</sub> − J<sub>before</sub></span><small>Positive terms add evidence; penalty terms subtract it. Exact active weights are shown on the next slide.</small></div>
+    <aside class="notes">Introduce the objective before the policy loop. W1 asks whether the cell-type posterior becomes more confident. W5 asks whether the candidate expression fits the current posterior. W2 penalizes distance from the owner nucleus. W3 activates when another nucleus is closer. W4 rewards local eight-neighbor continuity. The shape prior scores log area, compactness, solidity, and anisotropy against the reference distribution. The RL signal is the change in the full patch objective after a discrete replacement.</aside>
+  </section>
+
+  <section class="slide dark-slide rl-detail-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>19</span> Patch-level RL</div>
+    <h2>State → policy → REPLACE → rebuild → reward</h2>
+    <div class="rl-cycle">
+      <article class="rl-cycle-card state-card"><small>1 · state</small><div class="rl-mini-board"><i class="a"></i><i class="a"></i><i class="b"></i><i class="a"></i><i class="question">?</i><i class="b"></i><i class="a"></i><i class="b"></i><i class="b"></i></div><b>One owner per barcode</b><span>EM initialization + current cell profiles, posterior, geometry, neighborhood, and shape.</span></article>
+      <div class="rl-cycle-arrow">→</div>
+      <article class="rl-cycle-card policy-card fragment fade-up"><small>2 · PPO policy</small><div class="policy-ranking"><p><i></i><b>A → B</b><span>0.61</span></p><p><i></i><b>A → C</b><span>0.27</span></p><p><i></i><b>STOP</b><span>0.12</span></p></div><b>Rank every legal action</b><span>The mask exposes only entropy-ambiguous, non-nuclear bins and valid candidate cells.</span></article>
+      <div class="rl-cycle-arrow">→</div>
+      <article class="rl-cycle-card action-card fragment fade-up"><small>3 · discrete action</small><div class="replace-symbol"><i>A</i><b>REPLACE</b><i>B</i></div><b>Move one physical barcode</b><span>Ownership changes A → B; fractional membership is never introduced into RL.</span></article>
+      <div class="rl-cycle-arrow">→</div>
+      <article class="rl-cycle-card rebuild-card fragment fade-up"><small>4 · environment</small><div class="rebuild-pair"><i>A</i><span>− bin</span><i>B</i><span>+ bin</span></div><b>Rebuild both affected cells</b><span>Update expression sums, type posterior, distance/overlap, neighbors, shape, and patch score.</span></article>
+    </div>
+    <div class="reward-anatomy fragment fade-up"><div class="reward-heading"><small>5 · learning signal</small><b>reward = J<sub>after</sub> − J<sub>before</sub></b><span>whole patch · repeat with the new state</span></div><div class="reward-parts"><article class="off"><b>w1 · 0</b><span>new expression confidence</span></article><article><b>w5 · +0.15</b><span>posterior compatibility</span></article><article><b>w2 · −0.55</b><span>nucleus distance</span></article><article class="off"><b>w3 · 0</b><span>overlap penalty</span></article><article><b>w4 · +0.035</b><span>neighbor support</span></article><article><b>+0.00626</b><span>shape prior</span></article></div></div>
+    <p class="source inverse-source">Exact weights shown for the preserved w5 overfit run. EM probability is not added to reward; w1 and overlap were disabled in this checkpoint.</p>
+    <aside class="notes">Explain the loop, not only the action. The policy ranks legal replacements, the environment rebuilds both source and target cells, and PPO learns from the whole-patch objective change. The weight row is the exact preserved run.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>20</span> Current training experiment</div>
+    <h2>The formal run is a four-patch overfit experiment</h2>
+    <div class="overfit-layout">
+      <div class="patch-set">
+        <div class="patch-card-grid">
+          <article class="patch-card p1"><span>P1</span><b>patch_0091351</b><strong>66 cells</strong><small>15 core + 51 margin</small></article>
+          <article class="patch-card p2"><span>P2</span><b>patch_0031341</b><strong>29 cells</strong><small>7 core + 22 margin</small></article>
+          <article class="patch-card p3"><span>P3</span><b>patch_0095239</b><strong>45 cells</strong><small>11 core + 34 margin</small></article>
+          <article class="patch-card p4"><span>P4</span><b>patch_0022444</b><strong>50 cells</strong><small>10 core + 40 margin</small></article>
+        </div>
+        <div class="patch-geometry"><span><b>64 × 64 µm</b>outer patch</span><span><b>48 × 48 µm</b>scored core</span><span><b>104 × 104 µm</b>loaded context</span></div>
+      </div>
+      <div class="repeat-cycle"><div class="cycle-ring"></div><b>repeat</b><span>16 trajectories / update</span></div>
+      <div class="training-checkpoint"><div class="update-track"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="best"></i><i></i><i></i><i></i><i></i><i></i></div><b>15 PPO updates</b><span>best checkpoint at update 10</span><div class="gpu-chip">4 × A40</div></div>
+    </div>
+    <div class="overfit-verdict"><div><b>What it proves</b><span>the EM → environment → reward → PPO path runs end to end.</span></div><div><b>What it does not prove</b><span>generalization to held-out patches, patients, or real tissue.</span></div></div>
+    <p class="source">Preserved run: colorectal_nucleus_based_patch_overfit4_w5_validated_20260825T114854Z.</p>
+    <aside class="notes">Call this overfit training: an engineering/memorization experiment, not held-out validation. Each outer patch is 64 by 64 micrometres, with a 48 by 48 micrometre scoring core. To retain all candidate cells within the 20 micrometre MaxDis, the loader reads a 104 by 104 micrometre context. The four contexts contain 66, 29, 45, and 50 cells; their core and margin counts are shown on the cards.</aside>
+  </section>
+
+  <section class="slide light-slide">
+    <div class="slide-kicker"><span>21</span> Fair comparison</div>
+    <h2>Seven methods, one set of cells, one ownership audit</h2>
+    <div class="evaluation-layout"><div class="input-column"><b>same input</b><span>current simulated count matrix</span><span>aligned nuclear seeds</span><span>same 43 selected cells</span></div><div class="method-explain-grid"><article class="baseline"><b>Nucleus only</b><span>Keep only the protected barcodes that physically overlap each segmented nucleus.</span></article><article class="baseline"><b>Distance only</b><span>Use the same candidate graph as EM, disable expression, and harden the spatial top-1 owner.</span></article><article class="ours"><b>EM only</b><span>Alternate soft bin ownership and cell-type posteriors, then harden each barcode to its top-1 cell.</span></article><article class="ours"><b>EM + frozen RL</b><span>Start from EM top-1 and let the preserved PPO policy REPLACE eligible ambiguous owners.</span></article><article class="external"><b>Bin2Cell</b><span>Combine aligned nuclei with GEX-derived segmentation, then expand labels to group nearby 2 µm bins.</span></article><article class="external"><b>STCS</b><span>Build a pseudobulk profile from each nucleus and assign nearby bins using expression similarity plus distance.</span></article><article class="external"><b>SMURF</b><span>Iteratively group nuclear expression profiles, then optimize spot-to-cell proportions to reconstruct cell regions.</span></article></div><div class="audit-column"><b>same readout</b><span>mean per-cell IoU</span><span>fractional GT scoring</span><span>unique owner per barcode</span></div></div>
+    <div class="evaluation-warning"><b>Ground truth is evaluation-only.</b> No method receives source cell identities during inference.</div>
+    <aside class="notes">All methods see the same cells and are checked for duplicate owners.</aside>
+  </section>
+
+  <section class="slide light-slide result-slide">
+    <div class="slide-kicker"><span>22</span> Seven-method benchmark</div>
+    <h2>Where the methods land on the current simulated benchmark</h2>
+    <div class="results-layout">
+      <div class="bar-chart" role="img" aria-label="Mean IoU comparison across seven methods"><div class="axis-label">mean cell IoU</div><div class="bar-row external"><span>Bin2Cell</span><i style="--value:86.50%"></i><b>0.865</b></div><div class="bar-row external"><span>STCS</span><i style="--value:74.99%"></i><b>0.750</b></div><div class="bar-row ours"><span>EM only</span><i style="--value:70.18%"></i><b>0.702</b></div><div class="bar-row ours muted"><span>EM + frozen RL</span><i style="--value:69.35%"></i><b>0.694</b></div><div class="bar-row baseline"><span>Distance only</span><i style="--value:67.11%"></i><b>0.671</b></div><div class="bar-row external"><span>SMURF</span><i style="--value:54.60%"></i><b>0.546</b></div><div class="bar-row baseline"><span>Nucleus only</span><i style="--value:43.78%"></i><b>0.438</b></div><div class="bar-axis"><span>0</span><span>0.25</span><span>0.50</span><span>0.75</span><span>1.0</span></div></div>
+      <div class="result-reading"><div class="result-number"><strong>+0.264</strong><span>EM vs nucleus-only IoU</span></div><div class="result-number negative"><strong>−0.008</strong><span>frozen RL vs EM IoU</span></div><p><strong>Readout:</strong> EM adds substantial value. The current frozen policy does not improve it.</p><div class="legend"><span class="ours-dot"></span>HD-Cell-RL <span class="external-dot"></span>external tool <span class="baseline-dot"></span>baseline</div></div>
+    </div>
+    <div class="metric-strip"><span><b>43 / 43</b> cells matched by every method</span><span><b>unique-owner audit</b> passed</span><span><b>fractional GT</b> evaluated separately</span></div>
+    <aside class="notes">External tools’ high scores must be interpreted with the benchmark audit on slide 24.</aside>
+  </section>
+
+  <section class="slide dark-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>23</span> RL diagnosis</div>
+    <h2>The current policy changes the wrong bins too often</h2>
+    <div class="diagnostic-layout"><div class="diagnostic-copy"><div class="replace-counts"><div class="correct"><strong>6</strong><span>GT owners corrected</span></div><div class="damaged"><strong>16</strong><span>GT owners damaged</span></div><div class="neutral"><strong>34</strong><span>outside selected-cell GT</span></div><div class="unresolved"><strong>2</strong><span>owner map unresolved</span></div></div><p class="lead inverse">Only <strong>20.7%</strong> of policy choices were the highest-global-delta action.</p><p>At entropy threshold 0.5, all 875 scored non-nuclear bins were eligible. The ambiguity gate was effectively open everywhere.</p><div class="diagnosis-box"><span>Diagnosis</span>End-to-end training works, but action ranking and entropy calibration require repair before a new formal PPO run.</div></div><figure class="patch-figure"><img src="assets/patch_0091351.png" alt="Patch assignment diagnostic" /><figcaption>Example patch: predicted owners and GT correctness</figcaption></figure></div>
+    <aside class="notes">Separate action-ranking failure from entropy-calibration failure.</aside>
+  </section>
+
+  <section class="slide light-slide caveat-slide">
+    <div class="slide-kicker"><span>24</span> Benchmark audit</div>
+    <h2>Why the current benchmark makes reconstruction unusually easy</h2>
+    <div class="caveat-grid"><article><span class="caveat-number">5.15×</span><h3>Capture depth</h3><p>195.1 selected-gene UMI/bin in simulation vs 37.9 in real tissue.</p><small>Expression evidence is artificially clean.</small></article><article><span class="caveat-number">0.927</span><h3>Source recoverability</h3><p>Mean Spearman to each cell’s exact scDesign3 source profile.</p><small>Generator and reference share a parent cohort.</small></article><article><span class="caveat-number">0.624</span><h3>Geometry oracle</h3><p>Nucleus-centered radial growth with oracle area already scores highly.</p><small>The GT favors expansion-style geometry.</small></article></div>
+    <div class="benchmark-verdict"><strong>Interpretation</strong><p>This is a useful engineering benchmark for multi-owner logic and integration. It is not a credible estimate of real colorectal accuracy.</p></div>
+    <aside class="notes">This explains why Bin2Cell and STCS looked “too good.”</aside>
+  </section>
+
+  <section class="slide dark-slide closing-slide" data-background-color="#f7f7f4">
+    <div class="slide-kicker inverse"><span>25</span> Next validation gate</div>
+    <h2>Make the benchmark harder before training again</h2>
+    <div class="roadmap"><div class="roadmap-step"><span>01</span><strong>Realism-matched benchmark</strong><p>Match real capture depth; add structured ambient and boundary noise.</p></div><div class="roadmap-arrow">→</div><div class="roadmap-step"><span>02</span><strong>Independent reference</strong><p>Separate generator and inference by donor or cohort.</p></div><div class="roadmap-arrow">→</div><div class="roadmap-step"><span>03</span><strong>Re-run 7 methods</strong><p>Accuracy, runtime, memory, failures, and robustness.</p></div><div class="roadmap-arrow">→</div><div class="roadmap-step"><span>04</span><strong>Calibrate + diagnose</strong><p>Entropy threshold and REPLACE reward attribution.</p></div><div class="roadmap-arrow">→</div><div class="roadmap-step future"><span>05</span><strong>Train new PPO</strong><p>Only after validation passes audit.</p></div></div>
+    <div class="closing-message"><p><span>Current status</span>The assignment architecture works; the next milestone is trustworthy evidence that RL adds value beyond EM.</p></div>
+    <div class="closing-footer"><span>HD-Cell-RL progress report</span><a href="https://arxiv.org/abs/2606.09675">Ishaque et al. 2026</a></div>
+    <aside class="notes">Close with the gate: a realism-matched benchmark, recalibration, then one new formal PPO run.</aside>
+  </section>
+
+</div></div>
+<script src="vendor/reveal.js"></script><script src="deck.js?v=20260901-4"></script>
+</body>
+</html>
