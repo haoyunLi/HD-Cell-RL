@@ -9,7 +9,9 @@ Repository roles and placement rules are documented in [`docs/PROJECT_STRUCTURE.
 
 **[Open the latest published patch evaluation](https://haoyunli.github.io/HD-Cell-RL/)**
 
-The public site is a single latest-run snapshot from `gh-pages`. Source code remains on `main`, while each successful publication replaces the previous evaluation snapshot instead of accumulating generated runs in Git history.
+**[Open the project progress report](https://haoyunli.github.io/HD-Cell-RL/progress-report/)**
+
+The public `gh-pages` snapshot keeps the latest patch debugger at the site root and the Reveal presentation under `/progress-report/`. Source code remains on `main`; each successful publication replaces the previous generated snapshot instead of accumulating run artifacts in Git history.
 
 Current main training path:
 - Build episodes once.
