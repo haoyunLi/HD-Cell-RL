@@ -53,3 +53,33 @@ Many diagrams use Reveal fragments. Advance within a slide to reveal each step; 
 The preserved PPO run is historical four-patch overfit. The latest method comparison is donor-disjoint but not independent-tissue validation. The newest realism audit reuses examined patches and does not establish a new method ranking. Source/denominator caveats remain visible beside the data.
 
 The locally generated microscopy and workflow illustrations are presentation schematics. Actual project output is used for nuclear segmentation, whole-cell expansion, and patch-level diagnostics.
+
+## Interactive explanation edition
+
+This edition retains 29 slides and all existing experiment results. Use the public link above to share the presentation.
+
+- 05 follows fixed schematic nuclei A–E through simulated masks, RNA placement, binning and the inference/evaluation boundary.
+- 10 reveals the saved expansion overlay on the same H&E crop.
+- 17 computes a deterministic educational EM example, with whole-patch E/M steps and fixed nuclear cell profiles.
+- 19 separates a schematic transfer drawing from two measured historical REPLACE actions; GT is revealed last.
+- 22 compares conditions with paired, identically scaled IoU dot plots; the exact table remains expandable.
+- 24 compares pseudo coverage, nonzero pseudo counts and nonzero real counts across all four saved contexts.
+- 25 plots actual Cycling T UMI empirical distributions; it does not reconstruct a distribution from aggregate CVs.
+- 27 shifts saved nuclear bins across unchanged pseudo coverage and reports missing destinations separately.
+
+Use the arrow keys or Next / Back / Replay. No animation autoplays. The current step and selected case/context are retained in the URL on the interactive pages. Mobile portrait uses a stacked reading layout; mobile landscape keeps the scene and explanation adjacent where space permits. Other legacy slides retain their fixed presentation layout. Reduced-motion mode removes transitions. PDF mode shows final states with static key-frame summaries for EM and both REPLACE outcomes.
+
+### Design and evidence contract
+
+The user approved the white desktop/mobile EM concept on September 8, 2026 (preview `exec-8ff03a04-3364-4ce0-acef-1b6fe7533001.png`). Locked elements are fixed spatial identities, scene-first reading order, directly labelled probabilities, a stepper, visible schematic/source caveats and editable data layers. Exact geometry and probability widths are computed in code, correcting the approximate concept image. The raster preview is not a scientific asset.
+
+SVG owns the sparse schematic and quantitative chart labels; Canvas owns the dense, actual barcode maps. Reveal fragments own step navigation. These are local specialist passes, without delegated agents or new dependencies. The shared A–E geometry is a teaching device; the historical A/B transfer roles are not asserted to be those same physical cells. The production EM/RL implementation is untouched.
+
+To regenerate the compact slide data from saved results, run from the repository root:
+
+```bash
+Bin2Cell_Validation/bin/python scripts/build_progress_report_story_data.py
+node --test tests/progress_report_story.test.cjs
+```
+
+The builder reads existing matrices and annotations, reconciles profile summaries and reward components, and writes only `assets/story-data.js`. It does not regenerate pseudo data, run any method, train a policy or change source runs.

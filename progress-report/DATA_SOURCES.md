@@ -11,10 +11,11 @@ Paths are relative to the repository root unless noted otherwise.
 | 06–11, 13, 15 | Original full-slide geometry and compartment recipe | External validation repository: `Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/`; original whole-slide summaries |
 | 12, 14 | Latest local donor-disjoint dataset | `runs/benchmarks/em_donor_disjoint_unseen_patches_20260903T192649Z/inputs/summary.json`; `reference/reference_counts_donor_disjoint.summary.json` |
 | 17, 21 | Frozen EM and split/implementation audit | Same benchmark: `comparison/leakage_audit.json`, `comparison/report.md` |
-| 19–20 | Preserved August PPO configuration/training | `runs/colorectal_nucleus_based_patch_overfit4_w5_validated_20260825T114854Z/` |
+| 19 | Two source-backed historical actions | Same reward-attribution directory as slide 23: `replace_reward_attribution.csv`; first inside-core row per outcome with both matched GT IDs present |
+| 20 | Preserved August PPO configuration/training | `runs/colorectal_nucleus_based_patch_overfit4_w5_validated_20260825T114854Z/` |
 | 22 | Latest completed five-method results, measured September 3 | Donor-disjoint benchmark: `comparison/method_comparison.csv` |
 | 23 | Historical frozen-RL diagnosis, not a new RL run | `runs/benchmarks/colorectal_nucleus_based_multi_owner_v2_43cells_20260826T210246Z/evaluations/hd_cell_rl_em_plus_frozen_rl_v2_43cells_20260826T212325Z/diagnostics/reward_attribution/` |
-| 24 | Combined 28-configuration / 78-realization audit | `runs/benchmarks/pseudo_realism_20260908T012500Z/comparison/experiment_manifest.json`, `audit_2um_summary.csv` |
+| 24 | Actual bin support plus combined audit | `runs/benchmarks/pseudo_realism_20260908T012500Z/`: `barcodes.parquet`, `matrices/{source_high_depth,depth_uniform,real}.npz`, `comparison/all_realizations_support.csv`; contributing-cell fractional GT from the September 3 benchmark |
 | 25 | Library-size variation and marker-separation controls | Same realism experiment: `comparison/source_profile_depth.csv`, `profile_controls/profile_depth.csv`, `comparison/profile_separation_matched_depth.csv` |
 | 26 | Corrected exact-gene-ID background audit | Same realism experiment: `tissue_background_panel_ids/tissue_background_counts.csv`; local unassigned fraction in `comparison/audit_2um_summary.csv` |
 | 27 | Imposed nuclear shifts and localization controls | Same realism experiment: `comparison/nuclear_observation_shift.csv`, `comparison/audit_2um_summary.csv` |
@@ -37,8 +38,20 @@ Paths are relative to the repository root unless noted otherwise.
 
 ## Verification
 
-All displayed values in the five new result/audit tables were checked against the source CSVs, including rounding and three-seed CV means. The combined manifest and dataset dimensions were checked separately. The 29 slide numbers match the bilingual speech script.
+The September data-refresh tables were checked against source CSVs, including rounding and three-seed CV means. The interactive edition additionally checks the saved bin universe, shift statistics, actual UMI distributions and weighted action deltas. The 29 slide numbers match the bilingual speech script.
 
-Local Chromium/Playwright checks covered desktop (1600×900, 1280×720), a 390×844 mobile viewport, missing images, console errors, navigation and updated-page bounds. Desktop projection checks passed. At narrow mobile widths, Reveal automatically switches to scroll view: the requested slide-22 link can report the adjacent slide as active. Use desktop presentation mode for the talk; exact mobile deep-link positioning remains a limitation of the existing viewer.
+The interactive edition disables automatic scroll-mode activation and gives its five stepper pages dedicated narrow-screen layouts. Local Chromium/Playwright checks exercise navigation, rewind/replay, case/context selection, missing images, console errors, page bounds and reduced motion. Non-interactive legacy slides still use a scaled presentation layout on small screens.
+
+Interactive validation: 11 Node regression tests passed; all 20 stepper states passed desktop footer/overflow checks. Checks also passed at 1280 × 720, with a 390-pixel-wide mobile reader, reduced motion, and reloadable step/case/context URLs. Chromium PDF export contains 29 slide pages, with the five steppers at their final states and visible static EM/REPLACE summaries. Test screenshots and the PDF are temporary QA files, not new experiment artifacts.
 
 Only presentation files and the bilingual script changed during the data refresh. No data generation, method evaluation, formal training or source-run overwrite was performed. The subsequent Pages publication updates only the presentation and preserves the existing patch-debug snapshot.
+
+## Interactive data details
+
+- `assets/story-data.js` is a compact derived display asset built by `scripts/build_progress_report_story_data.py`. Sources remain read-only. Counts are on the exact 18,132-feature panel, in the saved barcode order.
+- Support maps show all loaded bins in a selected context. Coordinates are barcode-array row/column offsets, not H&E orientation. Missing array positions are gray, never silently zero-filled. The outline is the union of pseudo-covered bins, not individual cell boundaries or real-cell GT.
+- `depth_uniform.npz` contains seed 20260907. Its four-context BA is 0.9991997866. The previously reported 0.9990 is a three-seed mean; ROI, single-realization and averaged summaries are labelled separately.
+- The slide-25 ECDF uses actual Cycling T panel totals from 579 donor-disjoint generator scRNA cells and 60 assigned scDesign3 profiles. H5 cell barcodes and gene names are aligned before summing; means, CVs and sample counts are checked against `source_profile_depth.csv`. Donor IDs and scRNA cell barcodes are not needed in the public display asset.
+- Slide 19 uses the first eligible corrected and damaged rows in saved CSV order, not maximum-effect examples. Both cells must have GT matches, and the bin must be inside-core. Components are already weighted; rounding and numerical residuals reconcile their sum to the saved reward. Geometry is schematic and no new rollout is implied.
+- Slide 17 is a deterministic three-type/five-cell educational calculation. The equal type/cell blend is illustrative, not the experiment's adaptive reliability formula. Nuclear rows are fixed one-hot; the E-step is batch-style and the M-step resets evidence. Nuclear profiles remain fixed. It never reads GT or modifies production EM.
+- The interactive follow-up changes only the presentation. Historical training, benchmarks and the deployed debug snapshot remain unchanged.
