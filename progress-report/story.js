@@ -210,7 +210,7 @@
     for(let t=0;t<=maxLog;t++){const value=t===0?0:10**t,x=110+Math.log10(value+1)/maxLog*800;s+=`<path d="M${x} 28V292" stroke="#e0e5e9"/><text x="${x}" y="322" text-anchor="middle" font-size="21">${value.toLocaleString()}</text>`;}
     for(let t=0;t<=4;t++){const y=292-t/4*264;s+=`<path d="M110 ${y}H910" stroke="#e0e5e9"/><text x="90" y="${y+7}" text-anchor="end" font-size="20">${t*25}%</text>`;}
     series.forEach(([label,vals,color],i)=>{let path='M110 292';vals.forEach((v,j)=>{const x=110+Math.log10(v+1)/maxLog*800,y=292-(j+1)/vals.length*264;path+=`H${x}V${y}`;});path+='H910';s+=`<path d="${path}" stroke="${color}" stroke-width="3" fill="none"/><text x="950" y="${95+i*70}" fill="${color}" font-size="27">${label}</text><text x="950" y="${123+i*70}" font-size="21">n = ${vals.length} cells</text>`;});
-    s+='<text x="480" y="362" text-anchor="middle" font-size="23">Total UMI per cell · log10(1 + UMI) spacing</text><text x="12" y="20" font-size="19">Fraction of cells</text></svg>';
+    s+='<text x="480" y="362" text-anchor="middle" font-size="23">Total UMI per cell · log10(1 + UMI) spacing</text><text x="110" y="20" font-size="19">Fraction of cells</text></svg>';
     host.innerHTML=s;
   }
 
