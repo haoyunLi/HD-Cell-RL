@@ -1,0 +1,32 @@
+# Experimental retained baseline, not a biologically validated final formula.
+# Keep old run configs unchanged. This file is an EM section, not a PPO job.
+em_assignment:
+  enabled: true
+  use_existing_rl_candidate_max_distance: true
+  spatial_weight: 1.0
+  expression_weight: 1.5
+  damping: 0.5
+  max_iterations: 15
+  bin_universe:
+    non_nuclear_filter: positive_expression
+  background:
+    enabled: false
+  convergence:
+    top_owner_change_fraction: 0.01
+    mean_probability_change: 0.001
+    max_q_change: 0.001
+    mean_profile_total_variation: 0.001
+  cell_specific_expression:
+    enabled: true
+    relative_prior_strength: 2.0
+    profile_update_damping: 0.0
+    compatibility_mode: standard
+    reliability_mode: nuclear_depth
+  ambiguity:
+    entropy_threshold: 0.5
+  rl_integration:
+    initialize_from_em: true
+    lock_nuclear_bins: true
+    refine_ambiguous_only: true
+  artifacts:
+    save: false

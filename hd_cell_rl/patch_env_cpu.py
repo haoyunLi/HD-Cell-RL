@@ -31,6 +31,10 @@ class MultiCellPatchEnv:
     """Patch-level ADD/STOP environment with unique barcode ownership."""
 
     def __init__(self, context: PatchContext) -> None:
+        if context.em_assignment is not None:
+            raise ValueError(
+                "EM-initialized patch refinement requires the Torch global-delta environment"
+            )
         self._ctx = context
         self._core_cell_ids = set(context.core_cell_ids)
         self._cell_ids = tuple(ctx.cell_id for ctx in context.cells)

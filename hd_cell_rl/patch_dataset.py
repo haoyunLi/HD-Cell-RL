@@ -9,7 +9,10 @@ import json
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 
+from .em_assignment import build_sparse_patch_em_input, initialize_patch_context_from_em
+from .em_types import EMAssignmentConfig
 from .patch_types import PatchBounds, PatchContext, PatchTrainingSettings
 from .ppo_config import PPOTrainingConfig
 from .ppo_dataset import EpisodeDataset
@@ -46,6 +49,82 @@ class PatchDataset:
     def close(self) -> None:
         self._cell_dataset.close()
 
+    @property
+    def reference_theta(self) -> np.ndarray:
+        return self._cell_dataset.reference_theta
+
+    def load_cell_candidate_expression(
+        self,
+        cell_id: str,
+    ) -> tuple[tuple[str, ...], np.ndarray] | None:
+        """Load selected-gene candidate expression for one physical cell."""
+        artifact_path = self._artifact_by_cell.get(str(cell_id))
+        if artifact_path is None:
+            raise KeyError(f"no episode artifact for cell {cell_id!r}")
+        return self._cell_dataset.load_episode_candidate_expression(
+            cell_id=str(cell_id),
+            artifact_path=artifact_path,
+        )
+
+    def load_unique_patch_expression(
+        self,
+        *,
+        context: PatchContext,
+        barcode_ids: tuple[str, ...],
+    ) -> sparse.csr_matrix:
+        """Load selected-gene counts once per stable physical barcode.
+
+        Episode artifacts repeat a physical barcode for every candidate cell.
+        This method mirrors the patch environment's unique-owner representation
+        and aligns the sparse matrix exactly to ``barcode_ids``.
+        """
+        target_index = {
+            str(barcode): idx for idx, barcode in enumerate(barcode_ids)
+        }
+        if len(target_index) != len(barcode_ids):
+            raise ValueError("EM barcode_ids must be unique")
+        remaining = set(target_index)
+        rows: list[sparse.csr_matrix | None] = [None] * len(barcode_ids)
+        n_genes: int | None = None
+        for cell in context.cells:
+            artifact_path = self._artifact_by_cell.get(str(cell.cell_id))
+            if artifact_path is None:
+                raise KeyError(f"no episode artifact for cell {cell.cell_id!r}")
+            loaded = self._cell_dataset.load_episode_sparse_expression(
+                cell_id=str(cell.cell_id), artifact_path=artifact_path, wanted_barcodes=remaining)
+            loaded_ids, expression = loaded
+            values = sparse.csr_matrix(expression, dtype=np.float64)
+            if values.ndim != 2 or values.shape[0] != len(loaded_ids):
+                raise ValueError(
+                    f"candidate expression shape mismatch for cell {cell.cell_id!r}"
+                )
+            if n_genes is None:
+                n_genes = int(values.shape[1])
+            elif int(values.shape[1]) != n_genes:
+                raise ValueError(
+                    "candidate expression gene dimensions differ across cells"
+                )
+            for local_idx, raw_barcode in enumerate(loaded_ids):
+                barcode = str(raw_barcode)
+                if barcode not in remaining:
+                    continue
+                rows[target_index[barcode]] = sparse.csr_matrix(
+                    values[local_idx : local_idx + 1]
+                )
+                remaining.remove(barcode)
+            if not remaining:
+                break
+        if remaining:
+            raise ValueError(
+                f"missing expression for {len(remaining)} EM bins in patch "
+                f"{context.patch_id!r} (first: {sorted(remaining)[:5]})"
+            )
+        if n_genes is None or any(row is None for row in rows):
+            raise ValueError(
+                f"no complete candidate expression was loaded for patch {context.patch_id!r}"
+            )
+        return sparse.vstack(rows, format="csr", dtype=np.float64)
+
     def sample_rows(self, n_rows: int) -> pd.DataFrame:
         if n_rows <= 0:
             raise ValueError("n_rows must be > 0")
@@ -58,9 +137,54 @@ class PatchDataset:
         if self._settings.cache_patch_contexts and patch_id in self._context_cache:
             return self._context_cache[patch_id]
 
+        outer_bounds = PatchBounds(
+            x_min=float(getattr(row, "outer_x_min")),
+            x_max=float(getattr(row, "outer_x_max")),
+            y_min=float(getattr(row, "outer_y_min")),
+            y_max=float(getattr(row, "outer_y_max")),
+        )
+        em_config = getattr(self._settings, "em_assignment", EMAssignmentConfig())
+        candidate_max_distance_um: float | None = None
         patch_cell_ids = _json_cell_list(getattr(row, "patch_cell_ids"))
         core_cell_ids = tuple(_json_cell_list(getattr(row, "core_cell_ids")))
         margin_cell_ids = tuple(_json_cell_list(getattr(row, "margin_cell_ids")))
+        if em_config.enabled:
+            if not self._settings.margin_cells_compete:
+                raise ValueError(
+                    "em_assignment.enabled requires patch_training.margin_cells_compete=true"
+                )
+            if self._cell_dataset.candidate_radius_band_um is not None:
+                raise ValueError(
+                    "EM requires complete distance-only episode candidates, but the "
+                    "episode-build config has environment.radius_band_um set. Rebuild "
+                    "EM-ready episodes with radius_band_um=null; the EM radius still "
+                    "comes from environment.max_center_distance_um."
+                )
+            candidate_max_distance_um = self._resolve_candidate_max_distance(row)
+            complete_ids = self._cell_dataset.candidate_cell_ids_for_expanded_bounds(
+                x_min=outer_bounds.x_min,
+                x_max=outer_bounds.x_max,
+                y_min=outer_bounds.y_min,
+                y_max=outer_bounds.y_max,
+                expansion_um=candidate_max_distance_um,
+            )
+            missing_artifacts = sorted(
+                cell_id
+                for cell_id in complete_ids
+                if str(cell_id) not in self._artifact_by_cell
+            )
+            if missing_artifacts:
+                raise ValueError(
+                    "patch candidate context is incomplete: "
+                    f"{len(missing_artifacts)} nuclei within outer_bounds + MaxDis have no "
+                    "episode artifact (first: "
+                    f"{missing_artifacts[:5]}). Rebuild episodes with "
+                    "inputs.expression.filter_empty_nuclear_cells=false before enabling EM."
+                )
+            existing = set(patch_cell_ids)
+            patch_cell_ids.extend(
+                cell_id for cell_id in sorted(complete_ids) if cell_id not in existing
+            )
         if not self._settings.margin_cells_compete:
             patch_cell_ids = list(core_cell_ids)
 
@@ -78,7 +202,7 @@ class PatchDataset:
             )
             if ctx is None or ctx.n_bins <= 0:
                 continue
-            if int(np.sum(ctx.initial_membership_mask)) <= 0:
+            if not em_config.enabled and int(np.sum(ctx.initial_membership_mask)) <= 0:
                 continue
             cells.append(ctx)
             loaded_cell_ids.add(str(cell_id))
@@ -90,17 +214,15 @@ class PatchDataset:
             return None
 
         reward_backend = str(getattr(self._settings, "reward_backend", "standard")).strip().lower()
+        if em_config.enabled and reward_backend != "standard":
+            raise ValueError(
+                "generalized EM v1 supports the standard LL reward backend only"
+            )
         if reward_backend == "stcs":
             cells = self._attach_stcs_reward_scores(cells)
         elif reward_backend != "standard":
             raise ValueError("patch_training.reward_backend must be one of: standard, stcs")
 
-        outer_bounds = PatchBounds(
-            x_min=float(getattr(row, "outer_x_min")),
-            x_max=float(getattr(row, "outer_x_max")),
-            y_min=float(getattr(row, "outer_y_min")),
-            y_max=float(getattr(row, "outer_y_max")),
-        )
         force_fill_enabled = bool(getattr(self._settings, "force_fill_expression_bins", False))
         score_normalization = str(self._settings.score_normalization)
         should_build_expression_target = force_fill_enabled or score_normalization in {
@@ -114,11 +236,20 @@ class PatchDataset:
             else ()
         )
 
+        loaded_margin = (
+            tuple(
+                str(ctx.cell_id)
+                for ctx in cells
+                if str(ctx.cell_id) not in set(loaded_core)
+            )
+            if em_config.enabled
+            else tuple(cell_id for cell_id in margin_cell_ids if cell_id in loaded_cell_ids)
+        )
         context = PatchContext(
             patch_id=patch_id,
             cells=tuple(cells),
             core_cell_ids=loaded_core,
-            margin_cell_ids=tuple(cell_id for cell_id in margin_cell_ids if cell_id in loaded_cell_ids),
+            margin_cell_ids=loaded_margin,
             outer_bounds=outer_bounds,
             core_bounds=PatchBounds(
                 x_min=float(getattr(row, "core_x_min")),
@@ -137,10 +268,62 @@ class PatchDataset:
             agent_mode=str(getattr(self._settings, "agent_mode", "multi_cell")),
             after_fill_actions=str(getattr(self._settings, "after_fill_actions", "add_or_stop")),
             global_delta_epsilon=float(getattr(self._settings, "global_delta_epsilon", 1.0e-6)),
+            candidate_max_distance_um=candidate_max_distance_um,
         )
+        if em_config.enabled:
+            em_expression: sparse.csr_matrix | None = None
+            reference_theta: np.ndarray | None = None
+            if em_config.cell_specific_expression_enabled:
+                preliminary_em_input = build_sparse_patch_em_input(
+                    context=context,
+                    candidate_max_distance_um=float(candidate_max_distance_um),
+                    non_nuclear_bin_filter=em_config.non_nuclear_bin_filter,
+                )
+                em_expression = self.load_unique_patch_expression(
+                    context=context,
+                    barcode_ids=preliminary_em_input.barcode_ids,
+                )
+                reference_theta = np.asarray(self.reference_theta, dtype=np.float64)
+            context = initialize_patch_context_from_em(
+                context=context,
+                config=em_config,
+                candidate_max_distance_um=float(candidate_max_distance_um),
+                bin_gene_counts=em_expression,
+                reference_theta=reference_theta,
+            )
         if self._settings.cache_patch_contexts:
             self._context_cache[patch_id] = context
         return context
+
+    def _resolve_candidate_max_distance(self, row: Any) -> float:
+        """Resolve MaxDis from episode construction, never from reward.r_max_um."""
+        episode_value = self._cell_dataset.candidate_max_distance_um
+        row_value_raw = getattr(row, "candidate_max_distance_um", None)
+        row_value = (
+            None
+            if row_value_raw is None or bool(pd.isna(row_value_raw))
+            else float(row_value_raw)
+        )
+        if episode_value is None:
+            if row_value is None:
+                raise ValueError(
+                    "em_assignment requires environment.max_center_distance_um from the "
+                    "episode-build config/config_resolved.yaml"
+                )
+            episode_value = row_value
+        if row_value is not None and not np.isclose(
+            float(row_value),
+            float(episode_value),
+            rtol=0.0,
+            atol=1.0e-6,
+        ):
+            raise ValueError(
+                "patch index candidate_max_distance_um does not match episode-build "
+                "environment.max_center_distance_um"
+            )
+        if float(episode_value) <= 0.0:
+            raise ValueError("episode candidate max distance must be > 0")
+        return float(episode_value)
 
     def _attach_stcs_reward_scores(self, cells: list[EpisodeContext]) -> list[EpisodeContext]:
         payloads: list[StcsCellPayload] = []

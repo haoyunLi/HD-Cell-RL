@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hd_cell_rl.patch_training import (
+    EMAssignmentConfig,
     PatchDataset,
     PatchContext,
     PatchTrainingSettings,
@@ -116,6 +117,9 @@ def main() -> None:
         agent_mode=str(patch_cfg.get("patch_training", {}).get("agent_mode", "multi_cell")),
         after_fill_actions=str(patch_cfg.get("patch_training", {}).get("after_fill_actions", "add_or_stop")),
         global_delta_epsilon=float(patch_cfg.get("patch_training", {}).get("global_delta_epsilon", 1.0e-6)),
+        em_assignment=EMAssignmentConfig.from_mapping(
+            patch_cfg.get("em_assignment", {})
+        ),
     )
 
     device = _resolve_device(str(args.device))

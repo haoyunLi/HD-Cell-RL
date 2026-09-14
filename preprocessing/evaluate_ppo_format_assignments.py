@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pred_min_nuclear_overlap_frac", type=float, default=0.3)
     parser.add_argument("--pred_min_nuclear_overlap_bins", type=int, default=2)
     parser.add_argument("--gt_cell_bins_path", default=None)
+    parser.add_argument("--gt_fractional_cell_bins_path", default=None)
     parser.add_argument("--gt_nuclear_bins_path", default=None)
     parser.add_argument("--gt_cell_assignments_csv", default=None)
     parser.add_argument("--gt_sc_expression_h5", default=None)

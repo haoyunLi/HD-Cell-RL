@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hd_cell_rl.patch_training import (
+    EMAssignmentConfig,
     PatchDataset,
     PatchTrainingSettings,
     build_patch_rollout_cache,
@@ -78,6 +79,22 @@ def main() -> None:
     if agent_mode in {"single_cell_global_delta", "multi_cell_global_delta", "multi_cell_joint_global_delta"} and rollout_backend != "torch_gpu":
         raise ValueError(f"patch_training.agent_mode={agent_mode!r} requires rollout_backend='torch_gpu'")
     warm_start_raw = run_cfg.get("warm_start_checkpoint", "")
+    em_assignment = EMAssignmentConfig.from_mapping(patch_cfg.get("em_assignment", {}))
+    if em_assignment.enabled:
+        if agent_mode not in {
+            "single_cell_global_delta",
+            "multi_cell_global_delta",
+            "multi_cell_joint_global_delta",
+        }:
+            raise ValueError(
+                "em_assignment.enabled requires an existing global-delta REPLACE agent mode"
+            )
+        if rollout_backend != "torch_gpu":
+            raise ValueError("em_assignment.enabled requires patch_training.rollout_backend='torch_gpu'")
+        if reward_backend != "standard":
+            raise ValueError("generalized EM v1 supports patch_training.reward_backend='standard' only")
+        if not bool(patch_training.get("margin_cells_compete", True)):
+            raise ValueError("em_assignment.enabled requires patch_training.margin_cells_compete=true")
     warm_start_checkpoint = None if warm_start_raw in (None, "") else Path(str(warm_start_raw)).expanduser().resolve()
 
     # Patch v1 uses the low-level ADD/STOP policy only. Keeping planner disabled
@@ -110,11 +127,20 @@ def main() -> None:
         agent_mode=agent_mode,
         after_fill_actions=after_fill_actions,
         global_delta_epsilon=global_delta_epsilon,
+        em_assignment=em_assignment,
     )
 
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{_slugify(run_name)}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir.mkdir(parents=False, exist_ok=False)
+    if em_assignment.enabled and em_assignment.artifact_dir is None and (
+        em_assignment.save_artifacts or em_assignment.debug_patch_ids
+    ):
+        em_assignment = replace(
+            em_assignment,
+            artifact_dir=(run_dir / "em_assignment").resolve(),
+        )
+        settings = replace(settings, em_assignment=em_assignment)
     checkpoints_dir = run_dir / "checkpoints"
     logs_dir = run_dir / "logs"
     checkpoints_dir.mkdir()
@@ -159,6 +185,9 @@ def main() -> None:
         }
     )
     _write_yaml(base_config_used_path, config.to_serializable_dict())
+    patch_config_used["em_assignment"] = _serialize_em_assignment_config(
+        settings.em_assignment
+    )
     _write_yaml(run_dir / "patch_config_used.yaml", patch_config_used)
     _write_json(run_dir / "metadata.json", _build_metadata(run_dir, seed))
 
@@ -202,6 +231,7 @@ def main() -> None:
             "after_fill_actions": settings.after_fill_actions,
             "global_delta_epsilon": settings.global_delta_epsilon,
             "warm_start_checkpoint": None if warm_start_checkpoint is None else str(warm_start_checkpoint),
+            "em_assignment": _serialize_em_assignment_config(settings.em_assignment),
             "warm_start_info": warm_start_info,
         },
     )
@@ -429,6 +459,7 @@ def main() -> None:
             "after_fill_actions": settings.after_fill_actions,
             "global_delta_epsilon": settings.global_delta_epsilon,
             "warm_start_checkpoint": None if warm_start_checkpoint is None else str(warm_start_checkpoint),
+            "em_assignment": _serialize_em_assignment_config(settings.em_assignment),
             "warm_start_info": warm_start_info,
         },
     )
@@ -654,6 +685,74 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"config root must be a mapping: {path}")
     return data
+
+
+def _serialize_em_assignment_config(config: EMAssignmentConfig) -> dict[str, Any]:
+    return {
+        "enabled": bool(config.enabled),
+        "use_existing_rl_candidate_max_distance": bool(
+            config.use_existing_rl_candidate_max_distance
+        ),
+        "spatial_weight": float(config.spatial_weight),
+        "expression_weight": float(config.expression_weight),
+        "damping": float(config.damping),
+        "max_iterations": int(config.max_iterations),
+        "epsilon": float(config.epsilon),
+        "convergence": {
+            "top_owner_change_fraction": float(config.top_owner_change_fraction),
+            "mean_probability_change": float(config.mean_probability_change),
+            "max_q_change": float(config.max_q_change),
+            "mean_profile_total_variation": float(
+                config.mean_profile_total_variation
+            ),
+        },
+        "ambiguity": {
+            "entropy_threshold": float(config.entropy_threshold),
+        },
+        "bin_universe": {
+            "non_nuclear_filter": str(config.non_nuclear_bin_filter),
+        },
+        "background": {
+            "enabled": bool(config.background_enabled),
+            "owned_logit_intercept": float(
+                config.background_owned_logit_intercept
+            ),
+            "expression_confidence_weight": float(
+                config.background_confidence_weight
+            ),
+        },
+        "cell_specific_expression": {
+            "enabled": bool(config.cell_specific_expression_enabled),
+            "relative_prior_strength": float(
+                config.cell_profile_relative_prior_strength
+            ),
+            "profile_update_damping": float(
+                config.cell_profile_update_damping
+            ),
+            "compatibility_mode": str(
+                config.cell_profile_compatibility_mode
+            ),
+            "spatial_crossfit_block_size_um": float(
+                config.spatial_crossfit_block_size_um
+            ),
+            "reliability_mode": str(config.cell_profile_reliability_mode),
+            "heldout_reliability_grid_size": int(
+                config.heldout_reliability_grid_size
+            ),
+        },
+        "rl_integration": {
+            "initialize_from_em": bool(config.initialize_from_em),
+            "lock_nuclear_bins": bool(config.lock_nuclear_bins),
+            "refine_ambiguous_only": bool(config.refine_ambiguous_only),
+        },
+        "artifacts": {
+            "save": bool(config.save_artifacts),
+            "debug_patch_ids": list(config.debug_patch_ids),
+            "directory": None
+            if config.artifact_dir is None
+            else str(config.artifact_dir),
+        },
+    }
 
 
 def _apply_base_config_overrides(config: Any, overrides: dict[str, Any]) -> Any:

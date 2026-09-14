@@ -6,6 +6,17 @@ module keeps the original import path stable for scripts and tests.
 
 from __future__ import annotations
 
+from .em_assignment import (
+    build_sparse_patch_em_input,
+    em_debug_rows,
+    evaluate_em_assignments,
+    initialize_patch_context_from_em,
+    normalized_responsibility_entropy,
+    run_generalized_em,
+    save_em_debug_csv,
+    save_em_result_npz,
+)
+from .em_types import EMAssignmentConfig, EMAssignmentResult, SparseEMInput
 from .patch_assignment import _parse_square_barcode, patch_assignments_for_core_cells
 from .patch_competition import (
     _COMPETITION_MARGIN_FEATURE_SCALE,
@@ -111,6 +122,9 @@ from .ppo_state import (
 from .reward import compute_frontier_eligible_mask, compute_stop_delta
 
 __all__ = [
+    "EMAssignmentConfig",
+    "EMAssignmentResult",
+    "SparseEMInput",
     "PatchTrainingSettings",
     "PatchBounds",
     "PatchContext",

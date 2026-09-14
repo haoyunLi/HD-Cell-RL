@@ -34,8 +34,10 @@ from preprocessing.ppo_eval_plots import save_overlay_plots, save_summary_plots
 from preprocessing.ppo_eval_metrics import (
     build_episode_nuclear_barcode_map,
     collect_gt_nuclear_candidates,
+    compute_fractional_spatial_overlap_metrics,
     compute_spatial_overlap_metrics,
     load_episode_build_bins_path,
+    load_gt_bin_weights_for_cells,
     load_gt_bins_for_cells,
     match_episode_cells_by_nuclear_overlap,
     normalize_cell_id,
@@ -110,7 +112,13 @@ def add_ppo_format_assignment_eval_args(
         "--gt_cell_bins_path",
         type=str,
         default=None,
-        help="Optional GT full-cell bin table used for PPO-format IoU/Dice evaluation.",
+        help="Optional dominant-owner GT full-cell table used for discrete IoU/Dice.",
+    )
+    parser.add_argument(
+        "--gt_fractional_cell_bins_path",
+        type=str,
+        default=None,
+        help="Optional sparse fractional GT table used for weighted overlap metrics.",
     )
     parser.add_argument(
         "--gt_nuclear_bins_path",
@@ -596,6 +604,7 @@ def annotate_records_with_ground_truth(
     episodes_index_path: Path,
     gt_cell_bins_path: Path,
     gt_nuclear_bins_path: Path,
+    gt_fractional_cell_bins_path: Path | None,
     min_overlap_frac: float,
     min_overlap_bins: int,
 ) -> list[PredictionEvalRecord]:
@@ -627,6 +636,21 @@ def annotate_records_with_ground_truth(
         csv_path=gt_nuclear_bins_path,
         matched_cell_ids=matched_gt_ids,
     )
+    fractional_weights_by_cell = (
+        {}
+        if gt_fractional_cell_bins_path is None
+        else load_gt_bin_weights_for_cells(
+            csv_path=gt_fractional_cell_bins_path,
+            matched_cell_ids=matched_gt_ids,
+        )
+    )
+    if gt_fractional_cell_bins_path is not None:
+        missing_fractional = sorted(matched_gt_ids.difference(fractional_weights_by_cell))
+        if missing_fractional:
+            raise ValueError(
+                "fractional GT is missing matched physical cells: "
+                + ", ".join(missing_fractional[:10])
+            )
 
     updated: list[PredictionEvalRecord] = []
     for rec in records:
@@ -640,6 +664,14 @@ def annotate_records_with_ground_truth(
         }
         gt_barcodes = gt_barcodes_by_cell.get(str(matched_gt_cell_id), set()) if matched_gt_cell_id is not None else set()
         overlap = compute_spatial_overlap_metrics(assigned_barcodes, gt_barcodes) if matched_gt_cell_id is not None else None
+        fractional_overlap = (
+            compute_fractional_spatial_overlap_metrics(
+                assigned_barcodes,
+                fractional_weights_by_cell[str(matched_gt_cell_id)],
+            )
+            if matched_gt_cell_id is not None and gt_fractional_cell_bins_path is not None
+            else None
+        )
         gt_cell_xy = gt_xy_by_cell.get(str(matched_gt_cell_id)) if matched_gt_cell_id is not None else None
         gt_nuclear_xy = gt_nuclear_xy_by_cell.get(str(matched_gt_cell_id)) if matched_gt_cell_id is not None else None
         updated.append(
@@ -660,6 +692,15 @@ def annotate_records_with_ground_truth(
                     "gt_assigned_union": 0 if overlap is None else int(overlap["union"]),
                     "pred_n_bins": int(len(assigned_barcodes)) if overlap is None else int(overlap["pred_n_bins"]),
                     "gt_n_bins": int(len(gt_barcodes)) if overlap is None else int(overlap["gt_n_bins"]),
+                    "pred_fractional_iou": np.nan if fractional_overlap is None else fractional_overlap["iou"],
+                    "pred_fractional_dice": np.nan if fractional_overlap is None else fractional_overlap["dice"],
+                    "pred_fractional_precision": np.nan if fractional_overlap is None else fractional_overlap["precision"],
+                    "pred_fractional_recall": np.nan if fractional_overlap is None else fractional_overlap["recall"],
+                    "pred_fractional_f1": np.nan if fractional_overlap is None else fractional_overlap["f1"],
+                    "gt_fractional_intersection_mass": 0.0 if fractional_overlap is None else fractional_overlap["intersection_mass"],
+                    "gt_fractional_union_mass": 0.0 if fractional_overlap is None else fractional_overlap["union_mass"],
+                    "pred_fractional_mass": 0.0 if fractional_overlap is None else fractional_overlap["pred_mass"],
+                    "gt_fractional_mass": 0.0 if fractional_overlap is None else fractional_overlap["gt_mass"],
                 },
                 gt_cell_xy_um=None if gt_cell_xy is None else np.asarray(gt_cell_xy, dtype=np.float32),
                 gt_nuclear_xy_um=None if gt_nuclear_xy is None else np.asarray(gt_nuclear_xy, dtype=np.float32),
@@ -704,8 +745,15 @@ def run_ppo_format_assignment_evaluation(
 
     gt_cell_bins_path = None if getattr(args, "gt_cell_bins_path", None) is None else Path(str(args.gt_cell_bins_path)).expanduser().resolve()
     gt_nuclear_bins_path = None if getattr(args, "gt_nuclear_bins_path", None) is None else Path(str(args.gt_nuclear_bins_path)).expanduser().resolve()
+    gt_fractional_cell_bins_path = (
+        None
+        if getattr(args, "gt_fractional_cell_bins_path", None) is None
+        else Path(str(args.gt_fractional_cell_bins_path)).expanduser().resolve()
+    )
     if (gt_cell_bins_path is None) ^ (gt_nuclear_bins_path is None):
         raise ValueError("gt_cell_bins_path and gt_nuclear_bins_path must be provided together")
+    if gt_fractional_cell_bins_path is not None and gt_cell_bins_path is None:
+        raise ValueError("gt_fractional_cell_bins_path requires dominant and nuclear GT paths")
 
     target_cell_ids = load_eval_cell_ids(per_episode_csv)
     if not target_cell_ids:
@@ -775,11 +823,16 @@ def run_ppo_format_assignment_evaluation(
             raise FileNotFoundError(f"GT cell bins file not found: {gt_cell_bins_path}")
         if not gt_nuclear_bins_path.exists():
             raise FileNotFoundError(f"GT nuclear bins file not found: {gt_nuclear_bins_path}")
+        if gt_fractional_cell_bins_path is not None and not gt_fractional_cell_bins_path.exists():
+            raise FileNotFoundError(
+                f"fractional GT cell bins file not found: {gt_fractional_cell_bins_path}"
+            )
         records = annotate_records_with_ground_truth(
             records=records,
             episodes_index_path=episodes_index_path,
             gt_cell_bins_path=gt_cell_bins_path,
             gt_nuclear_bins_path=gt_nuclear_bins_path,
+            gt_fractional_cell_bins_path=gt_fractional_cell_bins_path,
             min_overlap_frac=float(args.gt_min_nuclear_overlap_frac),
             min_overlap_bins=int(args.gt_min_nuclear_overlap_bins),
         )
@@ -835,6 +888,9 @@ def run_ppo_format_assignment_evaluation(
         "episodes_index_path": str(episodes_index_path),
         "gt_enabled": bool(gt_enabled),
         "gt_cell_bins_path": None if gt_cell_bins_path is None else str(gt_cell_bins_path),
+        "gt_fractional_cell_bins_path": (
+            None if gt_fractional_cell_bins_path is None else str(gt_fractional_cell_bins_path)
+        ),
         "gt_nuclear_bins_path": None if gt_nuclear_bins_path is None else str(gt_nuclear_bins_path),
         "gt_cell_assignments_csv": None if gt_cell_assignments_csv is None else str(gt_cell_assignments_csv),
         "gt_sc_expression_h5": None if gt_sc_expression_h5 is None else str(gt_sc_expression_h5),
@@ -865,7 +921,20 @@ def run_ppo_format_assignment_evaluation(
         n_gt_matched = int(matched_gt.sum())
         if n_gt_matched > 0:
             summary["matched_pred_fraction_among_gt_matched"] = float((matched_pred & matched_gt).sum() / n_gt_matched)
-    for metric_col in ("pred_iou", "pred_dice", "pred_precision", "pred_recall", "pred_f1", "gene_spearman_r", "gene_rmse"):
+    for metric_col in (
+        "pred_iou",
+        "pred_dice",
+        "pred_precision",
+        "pred_recall",
+        "pred_f1",
+        "pred_fractional_iou",
+        "pred_fractional_dice",
+        "pred_fractional_precision",
+        "pred_fractional_recall",
+        "pred_fractional_f1",
+        "gene_spearman_r",
+        "gene_rmse",
+    ):
         _add_numeric_summary(summary, df, metric_col)
     if "pred_iou" in df.columns:
         iou_series = pd.to_numeric(df["pred_iou"], errors="coerce")
@@ -909,6 +978,9 @@ def run_ppo_format_assignment_evaluation(
             "pred_min_nuclear_overlap_frac": float(args.pred_min_nuclear_overlap_frac),
             "pred_min_nuclear_overlap_bins": int(args.pred_min_nuclear_overlap_bins),
             "gt_cell_bins_path": None if gt_cell_bins_path is None else str(gt_cell_bins_path),
+            "gt_fractional_cell_bins_path": (
+                None if gt_fractional_cell_bins_path is None else str(gt_fractional_cell_bins_path)
+            ),
             "gt_nuclear_bins_path": None if gt_nuclear_bins_path is None else str(gt_nuclear_bins_path),
             "gt_cell_assignments_csv": None if gt_cell_assignments_csv is None else str(gt_cell_assignments_csv),
             "gt_sc_expression_h5": None if gt_sc_expression_h5 is None else str(gt_sc_expression_h5),

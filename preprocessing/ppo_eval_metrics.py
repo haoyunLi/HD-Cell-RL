@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import yaml
+from hd_cell_rl.nuclear_seeds import load_confident_nuclear_rows
 
 
 def normalize_cell_id(value: Any) -> str | None:
@@ -53,19 +54,15 @@ def build_episode_nuclear_barcode_map(bins_path: Path, target_cell_ids: set[str]
     if not bins_path.exists():
         raise FileNotFoundError(f"episode-build bins metadata not found: {bins_path}")
 
-    df = pd.read_parquet(
-        bins_path,
-        columns=["barcode", "dominant_cell_id", "has_nuclear_annotation"],
-    )
-    df = df.loc[df["has_nuclear_annotation"].fillna(False).astype(bool)].copy()
-    dominant = pd.to_numeric(df["dominant_cell_id"], errors="coerce")
+    df = load_confident_nuclear_rows(bins_path)
+    dominant = df["dominant_cell_id"].map(normalize_cell_id)
     keep = dominant.notna()
     if not np.any(keep.to_numpy(dtype=bool, copy=False)):
         return {}
 
     out_df = pd.DataFrame(
         {
-            "cell_id": dominant.loc[keep].astype(np.int64).astype(str),
+            "cell_id": dominant.loc[keep].astype(str),
             "barcode": df.loc[keep, "barcode"].astype(str),
         }
     )
@@ -157,6 +154,64 @@ def load_gt_bins_for_cells(
     return barcode_sets, xy_map
 
 
+def load_gt_bin_weights_for_cells(
+    *,
+    csv_path: Path,
+    matched_cell_ids: set[str],
+) -> dict[str, dict[str, float]]:
+    """Load sparse fractional GT membership weights for requested physical cells."""
+    if not matched_cell_ids:
+        return {}
+
+    available_columns = pd.read_csv(csv_path, nrows=0).columns.tolist()
+    weight_column = next(
+        (
+            column
+            for column in ("cell_coverage_fraction", "weight")
+            if column in available_columns
+        ),
+        None,
+    )
+    if weight_column is None:
+        raise ValueError(
+            f"fractional GT table must contain cell_coverage_fraction or weight: {csv_path}"
+        )
+
+    weights_by_cell: dict[str, dict[str, float]] = defaultdict(dict)
+    with pd.read_csv(
+        csv_path,
+        usecols=["cell_id", "barcode", weight_column],
+        compression="infer",
+        chunksize=1_000_000,
+    ) as reader:
+        for chunk in reader:
+            chunk = chunk.dropna(subset=["cell_id", "barcode", weight_column]).copy()
+            chunk["cell_id"] = chunk["cell_id"].map(normalize_cell_id)
+            chunk = chunk.loc[chunk["cell_id"].isin(matched_cell_ids)].copy()
+            if chunk.empty:
+                continue
+            chunk["barcode"] = chunk["barcode"].astype(str)
+            chunk[weight_column] = pd.to_numeric(chunk[weight_column], errors="coerce")
+            values = chunk[weight_column].to_numpy(dtype=np.float64)
+            if not np.isfinite(values).all():
+                raise ValueError(f"fractional GT contains NaN or Inf weights: {csv_path}")
+            if np.any(values <= 0.0) or np.any(values > 1.0 + 1.0e-7):
+                raise ValueError(f"fractional GT weights must lie in (0, 1]: {csv_path}")
+
+            for row in chunk.itertuples(index=False):
+                cell_id = str(getattr(row, "cell_id"))
+                barcode = str(getattr(row, "barcode"))
+                weight = float(getattr(row, weight_column))
+                cell_weights = weights_by_cell[cell_id]
+                if barcode in cell_weights:
+                    raise ValueError(
+                        "fractional GT contains duplicate (cell_id, barcode) pair: "
+                        f"({cell_id!r}, {barcode!r})"
+                    )
+                cell_weights[barcode] = min(1.0, max(0.0, weight))
+    return dict(weights_by_cell)
+
+
 def match_episode_cells_by_nuclear_overlap(
     *,
     episode_nuclear_by_cell: dict[str, set[str]],
@@ -221,5 +276,46 @@ def compute_spatial_overlap_metrics(pred_barcodes: set[str], gt_barcodes: set[st
         "recall": recall,
         "f1": f1,
         "pred_n_bins": int(len(pred)),
+        "gt_n_bins": int(len(gt)),
+    }
+
+
+def compute_fractional_spatial_overlap_metrics(
+    pred_barcodes: set[str],
+    gt_weight_by_barcode: dict[str, float],
+) -> dict[str, Any]:
+    """Compute soft overlap metrics for binary predictions and fractional GT membership."""
+    pred = {str(value) for value in pred_barcodes}
+    gt = {str(key): float(value) for key, value in gt_weight_by_barcode.items()}
+    weights = np.asarray(list(gt.values()), dtype=np.float64)
+    if not np.isfinite(weights).all():
+        raise ValueError("fractional GT weights contain NaN or Inf")
+    if np.any(weights <= 0.0) or np.any(weights > 1.0 + 1.0e-7):
+        raise ValueError("fractional GT weights must lie in (0, 1]")
+
+    intersection_mass = float(sum(gt.get(barcode, 0.0) for barcode in pred))
+    pred_mass = float(len(pred))
+    gt_mass = float(weights.sum())
+    union_mass = float(pred_mass + gt_mass - intersection_mass)
+    iou = float(intersection_mass / union_mass) if union_mass > 0.0 else np.nan
+    denom = pred_mass + gt_mass
+    dice = float((2.0 * intersection_mass) / denom) if denom > 0.0 else np.nan
+    precision = float(intersection_mass / pred_mass) if pred_mass > 0.0 else 0.0
+    recall = float(intersection_mass / gt_mass) if gt_mass > 0.0 else 0.0
+    f1 = (
+        float((2.0 * precision * recall) / (precision + recall))
+        if (precision + recall) > 0.0
+        else 0.0
+    )
+    return {
+        "intersection_mass": intersection_mass,
+        "union_mass": union_mass,
+        "iou": iou,
+        "dice": dice,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "pred_mass": pred_mass,
+        "gt_mass": gt_mass,
         "gt_n_bins": int(len(gt)),
     }

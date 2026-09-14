@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
+from scipy import sparse
 import yaml
 
 from .matrix_io import resolve_matrix_csc_h5_path
@@ -54,6 +55,7 @@ class EpisodeArtifactLocator:
 class NucleiSpatialIndex:
     """Fast nearest-neighbor lookup over nucleus centers."""
 
+    cell_ids: tuple[str, ...]
     centers_xy_um: np.ndarray
     cell_id_to_index: dict[str, int]
     tree: cKDTree
@@ -72,6 +74,7 @@ def _build_nuclei_spatial_index(nuclei_centers_by_cell: dict[str, np.ndarray]) -
         raise ValueError("nuclei centers contain non-finite values")
 
     return NucleiSpatialIndex(
+        cell_ids=tuple(str(cell_id) for cell_id in cell_ids),
         centers_xy_um=centers,
         cell_id_to_index={cell_id: idx for idx, cell_id in enumerate(cell_ids)},
         tree=cKDTree(centers),
@@ -413,6 +416,29 @@ class _MatrixOnDemandExpressionLoader:
             out[i] = self._load_one_column(int(col))
         return out
 
+    def load_sparse_columns(self, col_indices: np.ndarray) -> sparse.csr_matrix:
+        """Read selected features directly into CSR, without a dense bins × genes buffer."""
+        cols = np.asarray(col_indices, dtype=np.int64)
+        if cols.ndim != 1 or np.any(cols < 0) or np.any(cols >= self._n_cols):
+            raise ValueError("candidate_matrix_col_index must be 1D and within matrix bounds")
+        values, positions, pointers = [], [], [0]
+        for col in cols:
+            start, end = self._indptr[int(col):int(col) + 2]
+            indices = np.asarray(self._indices_ds[int(start):int(end)], dtype=np.int64)
+            data = np.asarray(self._data_ds[int(start):int(end)], dtype=np.float64)
+            selected = self._feature_lookup[indices]
+            keep = selected >= 0
+            positions.append(selected[keep])
+            values.append(data[keep])
+            pointers.append(pointers[-1] + int(np.count_nonzero(keep)))
+        result = sparse.csr_matrix((
+            np.concatenate(values) if values else np.array([], dtype=np.float64),
+            np.concatenate(positions) if positions else np.array([], dtype=np.int64),
+            np.asarray(pointers, dtype=np.int64)), shape=(len(cols), self._expression_dim))
+        result.sum_duplicates()
+        result.sort_indices()
+        return result
+
     def compute_ll_for_columns(self, col_index: np.ndarray, log_theta: np.ndarray) -> np.ndarray:
         """Compute LL[B, K] directly from sparse matrix columns without dense BxG arrays."""
         ll, _ = self.compute_ll_and_bin_counts_for_columns(col_index=col_index, log_theta=log_theta)
@@ -566,6 +592,30 @@ def _load_episode_build_expression_context(
         "matrix_path": Path(str(matrix_value)).expanduser().resolve(),
         "cache_size": int(expression.get("cache_size", 20000)),
         "bins_path": None if bins_value is None else Path(str(bins_value)).expanduser().resolve(),
+    }
+
+
+def _load_episode_build_candidate_geometry_context(
+    episodes_index_path: Path,
+) -> dict[str, float | None] | None:
+    """Read the actual episode candidate geometry from its resolved build config."""
+    cfg_path = episodes_index_path.parent / "config" / "config_resolved.yaml"
+    if not cfg_path.exists():
+        return None
+    with cfg_path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle)
+    if not isinstance(raw, dict):
+        return None
+    environment = raw.get("environment")
+    if not isinstance(environment, dict):
+        return None
+    max_distance_raw = environment.get("max_center_distance_um")
+    if max_distance_raw is None:
+        return None
+    radius_band_raw = environment.get("radius_band_um")
+    return {
+        "max_center_distance_um": float(max_distance_raw),
+        "radius_band_um": None if radius_band_raw is None else float(radius_band_raw),
     }
 
 

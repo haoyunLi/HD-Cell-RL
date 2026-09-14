@@ -70,6 +70,36 @@ class TorchPatchEnv:
             barcode_index: tuple(sorted(cell_indices))
             for barcode_index, cell_indices in barcode_to_cell_indices.items()
         }
+        self._barcode_local_index_by_cell: list[dict[int, int]] = []
+        for ctx in context.cells:
+            self._barcode_local_index_by_cell.append(
+                {
+                    int(self._barcode_index_by_key[str(barcode)]): int(bin_idx)
+                    for bin_idx, barcode in enumerate(ctx.candidate_bin_ids)
+                }
+            )
+        self._em_initial_owner_by_barcode = torch.full(
+            (len(self._barcode_keys),),
+            -1,
+            device=device,
+            dtype=torch.long,
+        )
+        self._em_locked_by_barcode = torch.zeros(
+            (len(self._barcode_keys),),
+            device=device,
+            dtype=torch.bool,
+        )
+        self._em_ambiguous_by_barcode = torch.zeros(
+            (len(self._barcode_keys),),
+            device=device,
+            dtype=torch.bool,
+        )
+        self._replace_allowed_by_barcode = torch.ones(
+            (len(self._barcode_keys),),
+            device=device,
+            dtype=torch.bool,
+        )
+        self._configure_em_initialization()
         self._force_fill_target_indices_set = {
             int(self._barcode_index_by_key[str(barcode)])
             for barcode in context.force_fill_target_barcodes
@@ -252,6 +282,53 @@ class TorchPatchEnv:
             self._competition_other_cells.append(torch.as_tensor(cells_arr, device=self._device, dtype=torch.long))
             self._competition_other_bins.append(torch.as_tensor(bins_arr, device=self._device, dtype=torch.long))
 
+    def _configure_em_initialization(self) -> None:
+        result = getattr(self._ctx, "em_assignment", None)
+        if result is None:
+            return
+        result.validate()
+        if str(result.patch_id) != str(self._ctx.patch_id):
+            raise ValueError("EM assignment patch_id does not match PatchContext")
+        result_cell_to_env = {
+            result_idx: self._cell_index_by_id.get(str(cell_id))
+            for result_idx, cell_id in enumerate(result.cell_ids)
+        }
+        for bin_idx, barcode in enumerate(result.barcode_ids):
+            barcode_index = self._barcode_index_by_key.get(str(barcode))
+            if barcode_index is None:
+                raise ValueError(
+                    f"EM barcode {barcode!r} is missing from the Torch patch unique-barcode state"
+                )
+            result_owner = int(result.top1_cell_index[bin_idx])
+            if result_owner < 0:
+                if bool(result.is_nuclear_locked[bin_idx]):
+                    raise ValueError("locked nuclear EM row cannot select background")
+                self._em_ambiguous_by_barcode[int(barcode_index)] = bool(
+                    result.is_ambiguous[bin_idx]
+                )
+                continue
+            owner_cell_idx = result_cell_to_env.get(result_owner)
+            if owner_cell_idx is None:
+                raise ValueError(
+                    f"EM owner cell {result.cell_ids[result_owner]!r} is missing from PatchContext"
+                )
+            if int(barcode_index) not in self._barcode_local_index_by_cell[int(owner_cell_idx)]:
+                raise ValueError(
+                    f"EM owner cell {result.cell_ids[result_owner]!r} has no local row for barcode {barcode!r}"
+                )
+            self._em_initial_owner_by_barcode[int(barcode_index)] = int(owner_cell_idx)
+            self._em_locked_by_barcode[int(barcode_index)] = bool(
+                result.is_nuclear_locked[bin_idx]
+            )
+            self._em_ambiguous_by_barcode[int(barcode_index)] = bool(
+                result.is_ambiguous[bin_idx]
+            )
+        if bool(getattr(self._ctx, "em_refine_ambiguous_only", True)):
+            self._replace_allowed_by_barcode = self._em_ambiguous_by_barcode.clone()
+        self._replace_allowed_by_barcode = (
+            self._replace_allowed_by_barcode & (~self._em_locked_by_barcode)
+        )
+
     def reset(self) -> tuple[dict[str, Any], dict[str, Any]]:
         torch = self._torch
         self._membership_masks = [mask.clone() for mask in self._initial_masks]
@@ -268,6 +345,7 @@ class TorchPatchEnv:
         self._cell_rewards = {cell_id: 0.0 for cell_id in self._cell_ids}
         self._stop_reward_value = 0.0
         self._assign_initial_seed_owners()
+        self._assign_em_initial_owners()
         self._owned_force_fill_count = self._count_owned_force_fill_barcodes()
         self._rebuild_incremental_state()
         obs = self._build_observation()
@@ -397,6 +475,33 @@ class TorchPatchEnv:
             for _, _, cell_idx, bin_idx in candidates[1:]:
                 self._membership_masks[cell_idx][bin_idx] = False
             self._membership_masks[owner_cell_idx][owner_bin_idx] = True
+
+    def _assign_em_initial_owners(self) -> None:
+        if getattr(self._ctx, "em_assignment", None) is None:
+            return
+        for barcode_index in self._torch.nonzero(
+            self._em_initial_owner_by_barcode >= 0,
+            as_tuple=False,
+        ).flatten().detach().cpu().numpy().astype(np.int64).tolist():
+            owner_cell_idx = int(
+                self._em_initial_owner_by_barcode[int(barcode_index)].detach().cpu().item()
+            )
+            seed_owner = int(self._owner_by_barcode[int(barcode_index)].detach().cpu().item())
+            if seed_owner >= 0 and seed_owner != owner_cell_idx:
+                raise ValueError("EM hard ownership conflicts with a confident nuclear seed")
+            owner_bin_idx = self._barcode_local_index_by_cell[owner_cell_idx].get(
+                int(barcode_index)
+            )
+            if owner_bin_idx is None:
+                raise ValueError("EM hard owner has no aligned local candidate-bin row")
+            for cell_idx in self._barcode_to_cell_indices.get(int(barcode_index), ()):
+                local_bin_idx = self._barcode_local_index_by_cell[int(cell_idx)].get(
+                    int(barcode_index)
+                )
+                if local_bin_idx is not None:
+                    self._membership_masks[int(cell_idx)][int(local_bin_idx)] = False
+            self._membership_masks[owner_cell_idx][int(owner_bin_idx)] = True
+            self._owner_by_barcode[int(barcode_index)] = int(owner_cell_idx)
 
     def _rebuild_incremental_state(self) -> None:
         torch = self._torch
@@ -1226,6 +1331,28 @@ class TorchPatchEnv:
             return float(torch.mean(torch.topk(eligible_rewards, k).values).detach().cpu().item())
         raise ValueError(f"unsupported stop_stat: {stop_stat!r}")
 
+    def _em_info(self) -> dict[str, Any]:
+        result = getattr(self._ctx, "em_assignment", None)
+        if result is None:
+            return {
+                "em_assignment_enabled": False,
+                "n_em_bins": 0,
+                "n_em_ambiguous_bins": 0,
+                "n_em_nuclear_locked_bins": 0,
+            }
+        return {
+            "em_assignment_enabled": True,
+            "n_em_bins": int(result.n_bins),
+            "n_em_ambiguous_bins": int(np.sum(result.is_ambiguous)),
+            "n_em_nuclear_locked_bins": int(np.sum(result.is_nuclear_locked)),
+            "em_converged": bool(result.converged),
+            "em_iterations": int(len(result.iterations)),
+            "em_candidate_max_distance_um": float(result.candidate_max_distance_um),
+            "n_em_disconnected_hard_islands": int(
+                result.n_disconnected_hard_islands
+            ),
+        }
+
     def _build_info(self) -> dict[str, Any]:
         return {
             "patch_id": self._ctx.patch_id,
@@ -1240,6 +1367,7 @@ class TorchPatchEnv:
             "n_patch_cells": int(len(self._ctx.cells)),
             "n_force_fill_expression_bins": int(self._force_fill_target_count()),
             "n_force_fill_owned_expression_bins": int(self._owned_force_fill_count),
+            **self._em_info(),
         }
 
 
@@ -1283,6 +1411,10 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
         barcode_index = int(self._barcode_indices[cell_idx][bin_idx].detach().cpu().item())
 
         if is_replace:
+            if not bool(
+                self._replace_allowed_by_barcode[barcode_index].detach().cpu().item()
+            ):
+                raise ValueError("REPLACE action is masked by EM nuclear/entropy protection")
             old_cell_idx = int(self._cached_action_old_cells[action_idx].detach().cpu().item())
             old_bin_idx = int(self._cached_action_old_bins[action_idx].detach().cpu().item())
             if old_cell_idx < 0 or old_bin_idx < 0:
@@ -1318,6 +1450,7 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
 
     def patch_score(self) -> float:
         return float(self._global_raw_objective().detach().cpu().item() / self._score_denominator())
+
 
     def _build_observation(self) -> dict[str, Any]:
         summaries = [
@@ -1432,6 +1565,7 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
             target_mask = torch.isin(barcode_indices, self._force_fill_target_indices)
         add_legal = frontier & (owners < 0)
         replace_legal = frontier & (owners >= 0) & (owners != int(cell_idx))
+        replace_legal = replace_legal & self._replace_allowed_by_barcode[barcode_indices]
         if not filled:
             add_legal = add_legal & target_mask
             replace_legal = replace_legal & target_mask
@@ -1787,6 +1921,7 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
             "n_force_fill_owned_expression_bins": int(self._owned_force_fill_count),
             "agent_mode": str(getattr(self._ctx, "agent_mode", "single_cell_global_delta")),
             "active_cell_index": int(self._active_cell_idx),
+            **self._em_info(),
         }
 
 
@@ -1830,6 +1965,7 @@ class TorchJointPatchEnv(TorchSingleAgentPatchEnv):
             "last_step_applied": bool(getattr(self, "_last_step_applied", False)),
             "last_step_phase": str(getattr(self, "_last_step_phase", "prefill")),
             "last_step_outcome": str(getattr(self, "_last_step_outcome", "reset")),
+            **self._em_info(),
         }
 
     def _build_observation(self) -> dict[str, Any]:
@@ -1903,6 +2039,12 @@ class TorchJointPatchEnv(TorchSingleAgentPatchEnv):
             barcode_index = int(item["barcode_index"])
             is_replace = bool(item.get("is_replace", False))
             if is_replace:
+                if not bool(
+                    self._replace_allowed_by_barcode[barcode_index].detach().cpu().item()
+                ):
+                    raise ValueError(
+                        "joint REPLACE action is masked by EM nuclear/entropy protection"
+                    )
                 old_cell_idx = int(item["old_cell_idx"])
                 old_bin_idx = int(item["old_bin_idx"])
                 if old_cell_idx < 0 or old_bin_idx < 0:
@@ -1975,6 +2117,7 @@ class TorchJointPatchEnv(TorchSingleAgentPatchEnv):
 
         add_legal = frontier & (owners < 0)
         replace_legal = frontier & (owners >= 0) & (owners != int(cell_idx))
+        replace_legal = replace_legal & self._replace_allowed_by_barcode[barcode_indices]
         if not filled:
             add_legal = add_legal & target_mask
             replace_legal = replace_legal & target_mask

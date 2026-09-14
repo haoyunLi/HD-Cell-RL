@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -36,7 +37,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--min-core-cells", type=int, default=1)
     parser.add_argument("--min-patch-cells", type=int, default=2)
-    parser.add_argument("--max-patch-cells", type=int, default=64)
+    parser.add_argument("--max-patch-cells", type=int, default=0)
+    parser.add_argument(
+        "--candidate-max-distance-um",
+        type=float,
+        default=None,
+        help=(
+            "Validation override for the episode-build environment.max_center_distance_um. "
+            "By default the value is read from episodes_index/config/config_resolved.yaml."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -68,6 +78,10 @@ def main() -> None:
     patch_size = float(args.patch_size_um)
     stride = float(args.stride_um)
     core_size = float(args.core_size_um)
+    candidate_max_distance_um = _resolve_episode_candidate_max_distance(
+        episodes_index_path=episodes_index_path,
+        cli_value=args.candidate_max_distance_um,
+    )
     if not (0.0 < core_size <= patch_size):
         raise ValueError("--core-size-um must be >0 and <= --patch-size-um")
     if stride <= 0:
@@ -75,7 +89,8 @@ def main() -> None:
 
     rng = np.random.default_rng(int(args.seed))
     spatial_index = cKDTree(xy)
-    outer_query_radius = float(np.sqrt(2.0) * patch_size / 2.0)
+    context_half = patch_size / 2.0 + candidate_max_distance_um
+    outer_query_radius = float(np.sqrt(2.0) * context_half)
     centers_to_try: list[tuple[float, float, str]] = []
     x_min, y_min = np.min(xy, axis=0)
     x_max, y_max = np.max(xy, axis=0)
@@ -111,6 +126,7 @@ def main() -> None:
             min_core_cells=int(args.min_core_cells),
             min_patch_cells=int(args.min_patch_cells),
             max_patch_cells=int(args.max_patch_cells),
+            candidate_max_distance_um=candidate_max_distance_um,
             patch_index=len(rows),
         )
         if row is None:
@@ -134,6 +150,7 @@ def main() -> None:
             min_core_cells=1,
             min_patch_cells=1,
             max_patch_cells=int(args.max_patch_cells),
+            candidate_max_distance_um=candidate_max_distance_um,
             patch_index=len(rows),
         )
         if row is not None:
@@ -162,6 +179,11 @@ def main() -> None:
         "min_core_cells": int(args.min_core_cells),
         "min_patch_cells": int(args.min_patch_cells),
         "max_patch_cells": int(args.max_patch_cells),
+        "candidate_max_distance_um": float(candidate_max_distance_um),
+        "candidate_max_distance_source": (
+            "episode_build.environment.max_center_distance_um"
+        ),
+        "context_margin_um": float(candidate_max_distance_um),
         "mean_patch_cells": float(out_df["n_patch_cells"].mean()),
         "median_patch_cells": float(out_df["n_patch_cells"].median()),
         "mean_core_cells": float(out_df["n_core_cells"].mean()),
@@ -187,52 +209,44 @@ def _make_patch_row(
     min_core_cells: int,
     min_patch_cells: int,
     max_patch_cells: int,
+    candidate_max_distance_um: float,
     patch_index: int,
 ) -> dict[str, Any] | None:
     half = patch_size / 2.0
     core_half = core_size / 2.0
     outer = (cx - half, cx + half, cy - half, cy + half)
+    context = (
+        outer[0] - float(candidate_max_distance_um),
+        outer[1] + float(candidate_max_distance_um),
+        outer[2] - float(candidate_max_distance_um),
+        outer[3] + float(candidate_max_distance_um),
+    )
     core = (cx - core_half, cx + core_half, cy - core_half, cy + core_half)
     candidate_idx = np.asarray(candidate_indices, dtype=np.int64)
     candidate_xy = xy[candidate_idx]
-    in_outer = (
-        (candidate_xy[:, 0] >= outer[0])
-        & (candidate_xy[:, 0] <= outer[1])
-        & (candidate_xy[:, 1] >= outer[2])
-        & (candidate_xy[:, 1] <= outer[3])
+    in_context = (
+        (candidate_xy[:, 0] >= context[0])
+        & (candidate_xy[:, 0] <= context[1])
+        & (candidate_xy[:, 1] >= context[2])
+        & (candidate_xy[:, 1] <= context[3])
     )
-    outer_idx = candidate_idx[in_outer]
-    outer_xy = xy[outer_idx]
+    context_idx = candidate_idx[in_context]
+    context_xy = xy[context_idx]
     in_core = (
-        (outer_xy[:, 0] >= core[0])
-        & (outer_xy[:, 0] <= core[1])
-        & (outer_xy[:, 1] >= core[2])
-        & (outer_xy[:, 1] <= core[3])
+        (context_xy[:, 0] >= core[0])
+        & (context_xy[:, 0] <= core[1])
+        & (context_xy[:, 1] >= core[2])
+        & (context_xy[:, 1] <= core[3])
     )
-    core_idx = outer_idx[in_core]
-    patch_cells = cell_ids[outer_idx].astype(str).tolist()
+    core_idx = context_idx[in_core]
+    patch_cells = cell_ids[context_idx].astype(str).tolist()
     core_cells = cell_ids[core_idx].astype(str).tolist()
     if len(core_cells) < min_core_cells or len(patch_cells) < min_patch_cells:
         return None
     if max_patch_cells > 0 and len(patch_cells) > max_patch_cells:
-        if len(core_cells) > max_patch_cells:
-            core_dist = np.sum((xy[core_idx] - np.asarray([cx, cy], dtype=np.float64)) ** 2, axis=1)
-            keep_core = np.argsort(core_dist)[:max_patch_cells]
-            core_idx = core_idx[keep_core]
-            core_cells = cell_ids[core_idx].astype(str).tolist()
-            patch_cells = list(core_cells)
-        else:
-            core_set = set(core_cells)
-            margin_idx = np.asarray(
-                [idx for idx in outer_idx.tolist() if str(cell_ids[int(idx)]) not in core_set],
-                dtype=np.int64,
-            )
-            if margin_idx.size:
-                margin_dist = np.sum((xy[margin_idx] - np.asarray([cx, cy], dtype=np.float64)) ** 2, axis=1)
-                keep_margin = margin_idx[np.argsort(margin_dist)[: max_patch_cells - len(core_cells)]]
-                patch_cells = core_cells + cell_ids[keep_margin].astype(str).tolist()
-            else:
-                patch_cells = list(core_cells)
+        # Candidate completeness is a correctness constraint.  Skipping an
+        # oversized patch is safe; truncating its margin nuclei is not.
+        return None
     margin_cells = [cell for cell in patch_cells if cell not in set(core_cells)]
     return {
         "patch_id": f"patch_{patch_index:07d}",
@@ -243,6 +257,11 @@ def _make_patch_row(
         "outer_x_max": float(outer[1]),
         "outer_y_min": float(outer[2]),
         "outer_y_max": float(outer[3]),
+        "context_x_min": float(context[0]),
+        "context_x_max": float(context[1]),
+        "context_y_min": float(context[2]),
+        "context_y_max": float(context[3]),
+        "candidate_max_distance_um": float(candidate_max_distance_um),
         "core_x_min": float(core[0]),
         "core_x_max": float(core[1]),
         "core_y_min": float(core[2]),
@@ -254,6 +273,42 @@ def _make_patch_row(
         "core_cell_ids": json.dumps(core_cells),
         "margin_cell_ids": json.dumps(margin_cells),
     }
+
+
+def _resolve_episode_candidate_max_distance(
+    *,
+    episodes_index_path: Path,
+    cli_value: float | None,
+) -> float:
+    config_path = episodes_index_path.parent / "config" / "config_resolved.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            "episode-build config is required to reuse environment.max_center_distance_um: "
+            f"{config_path}"
+        )
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle)
+    if not isinstance(raw, dict) or not isinstance(raw.get("environment"), dict):
+        raise ValueError(f"episode-build config has no environment mapping: {config_path}")
+    existing_raw = raw["environment"].get("max_center_distance_um")
+    if existing_raw is None:
+        raise ValueError(
+            f"episode-build config has no environment.max_center_distance_um: {config_path}"
+        )
+    existing = float(existing_raw)
+    if existing <= 0.0:
+        raise ValueError("episode environment.max_center_distance_um must be > 0")
+    if cli_value is not None and not np.isclose(
+        float(cli_value),
+        existing,
+        rtol=0.0,
+        atol=1.0e-6,
+    ):
+        raise ValueError(
+            "--candidate-max-distance-um must match episode-build "
+            "environment.max_center_distance_um"
+        )
+    return existing
 
 
 def _normalize_format(fmt: str, path: Path) -> str:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from .em_types import EMAssignmentConfig, EMAssignmentResult
 from .ppo_state import EpisodeContext
 
 
@@ -32,6 +33,7 @@ class PatchTrainingSettings:
     agent_mode: str = "multi_cell"
     after_fill_actions: str = "add_or_stop"
     global_delta_epsilon: float = 1.0e-6
+    em_assignment: EMAssignmentConfig = field(default_factory=EMAssignmentConfig)
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,9 @@ class PatchContext:
     agent_mode: str = "multi_cell"
     after_fill_actions: str = "add_or_stop"
     global_delta_epsilon: float = 1.0e-6
+    candidate_max_distance_um: float | None = None
+    em_assignment: EMAssignmentResult | None = None
+    em_refine_ambiguous_only: bool = True
 
     @property
     def n_cells(self) -> int:

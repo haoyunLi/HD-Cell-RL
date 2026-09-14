@@ -9,8 +9,10 @@ import re
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 
 from .ppo_config import ConfigError, PPOTrainingConfig
+from .nuclear_seeds import load_confident_nuclear_rows
 from .ppo_state import EpisodeContext, _zscore_1d
 from .shape_prior import load_shape_prior_model
 from .reward import (
@@ -22,8 +24,12 @@ from .episode_artifacts import (
     _MatrixOnDemandExpressionLoader,
     _build_nuclei_centers,
     _build_nuclei_spatial_index,
+    _load_episode_build_candidate_geometry_context,
     _load_episode_build_expression_context,
     _load_one_episode_artifact,
+    _parse_episode_artifact_locator,
+    _load_legacy_episode_artifact_payload,
+    _load_sharded_episode_artifact_payload,
 )
 
 
@@ -64,6 +70,19 @@ class EpisodeDataset:
         nuclei_df = _load_table(config.nuclei_path, config.nuclei_format)
         centers = _build_nuclei_centers(df=nuclei_df, columns=config.nuclei_columns)
         self._nuclei_spatial_index = _build_nuclei_spatial_index(centers)
+        candidate_geometry = _load_episode_build_candidate_geometry_context(
+            config.episodes_index_path
+        )
+        self._candidate_max_distance_um = (
+            None
+            if candidate_geometry is None
+            else float(candidate_geometry["max_center_distance_um"])
+        )
+        self._candidate_radius_band_um = (
+            None
+            if candidate_geometry is None
+            else candidate_geometry["radius_band_um"]
+        )
 
         expression_ctx = _load_episode_build_expression_context(config.episodes_index_path)
         self._expression_loader: _MatrixOnDemandExpressionLoader | None = None
@@ -87,6 +106,67 @@ class EpisodeDataset:
     @property
     def n_cells(self) -> int:
         return int(len(self._index_df))
+
+    @property
+    def candidate_max_distance_um(self) -> float | None:
+        """Hard episode-build distance used to include/exclude candidate bins."""
+        return self._candidate_max_distance_um
+
+    @property
+    def candidate_radius_band_um(self) -> float | None:
+        """Optional secondary radial-band filter from episode construction."""
+        return self._candidate_radius_band_um
+
+    @property
+    def reference_theta(self) -> np.ndarray:
+        """Reference cell-type distributions aligned to loaded candidate expression."""
+        return self._theta
+
+    def candidate_cell_ids_for_expanded_bounds(
+        self,
+        *,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+        expansion_um: float,
+    ) -> tuple[str, ...]:
+        """Return all nuclei in an axis-aligned patch box expanded by MaxDis."""
+        expansion = float(expansion_um)
+        if expansion < 0.0:
+            raise ValueError("expansion_um must be >= 0")
+        lower_x = float(x_min) - expansion
+        upper_x = float(x_max) + expansion
+        lower_y = float(y_min) - expansion
+        upper_y = float(y_max) + expansion
+        center = np.asarray(
+            [(lower_x + upper_x) / 2.0, (lower_y + upper_y) / 2.0],
+            dtype=np.float64,
+        )
+        radius = float(
+            np.sqrt(
+                ((upper_x - lower_x) / 2.0) ** 2
+                + ((upper_y - lower_y) / 2.0) ** 2
+            )
+        )
+        candidate_indices = np.asarray(
+            self._nuclei_spatial_index.tree.query_ball_point(center, r=radius),
+            dtype=np.int64,
+        )
+        if candidate_indices.size == 0:
+            return ()
+        xy = self._nuclei_spatial_index.centers_xy_um[candidate_indices]
+        keep = (
+            (xy[:, 0] >= lower_x)
+            & (xy[:, 0] <= upper_x)
+            & (xy[:, 1] >= lower_y)
+            & (xy[:, 1] <= upper_y)
+        )
+        selected = candidate_indices[keep]
+        return tuple(
+            self._nuclei_spatial_index.cell_ids[int(idx)]
+            for idx in selected.tolist()
+        )
 
     def close(self) -> None:
         if self._expression_loader is not None:
@@ -239,6 +319,25 @@ class EpisodeDataset:
             raise ValueError(f"artifact {artifact_path} has no candidate expression payload")
         return tuple(prepared.candidate_bin_ids), expression
 
+    def load_episode_sparse_expression(self, *, cell_id: str, artifact_path: Path,
+                                       wanted_barcodes: set[str]) -> tuple[tuple[str, ...], sparse.csr_matrix]:
+        """Read only requested physical bins; do not recompute LL or densify H5 counts."""
+        locator = _parse_episode_artifact_locator(artifact_path)
+        if locator.member_index is None:
+            payload = _load_legacy_episode_artifact_payload(artifact_path=locator.path, include_candidate_bin_ids=True)
+        else:
+            payload = _load_sharded_episode_artifact_payload(locator=locator, cell_id=cell_id, include_candidate_bin_ids=True)
+        barcodes, _, _, expression, columns = payload
+        selected = np.asarray([i for i, barcode in enumerate(barcodes) if barcode in wanted_barcodes], dtype=np.int64)
+        ids = tuple(barcodes[int(i)] for i in selected)
+        if expression is not None:
+            counts = sparse.csr_matrix(expression[selected], dtype=np.float64)
+        elif columns is not None and self._expression_loader is not None:
+            counts = self._expression_loader.load_sparse_columns(columns[selected])
+        else:
+            raise ValueError(f"artifact {artifact_path} has no usable candidate expression payload")
+        return ids, counts
+
     def _get_cached_context(self, key: tuple[str, str, int | None]) -> EpisodeContext | None | object:
         if self._context_cache_size <= 0:
             return _CACHE_MISS
@@ -272,7 +371,7 @@ def _normalize_cell_id(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
-    if re.fullmatch(r"[+-]?\\d+\\.0+", text):
+    if re.fullmatch(r"[+-]?\d+\.0+", text):
         return text.split(".", 1)[0]
     return text
 
@@ -282,21 +381,11 @@ def _load_nuclear_barcode_assignment_lookup(bins_path: Path) -> dict[str, str]:
     if not bins_path.exists():
         raise FileNotFoundError(f"episode-build bins metadata not found: {bins_path}")
 
-    df = pd.read_parquet(
-        bins_path,
-        columns=[
-            "barcode",
-            "has_nuclear_annotation",
-            "dominant_cell_id",
-            "ambiguous_nuclear_assignment",
-        ],
-    )
+    df = load_confident_nuclear_rows(bins_path)
     if len(df) == 0:
         return {}
 
-    has_nuclear = df["has_nuclear_annotation"].fillna(False).astype(bool)
-    ambiguous = df["ambiguous_nuclear_assignment"].fillna(False).astype(bool)
-    out = df.loc[has_nuclear & ~ambiguous, ["barcode", "dominant_cell_id"]].copy()
+    out = df.loc[:, ["barcode", "dominant_cell_id"]].copy()
     if out.empty:
         return {}
 
