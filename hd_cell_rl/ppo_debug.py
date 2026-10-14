@@ -641,6 +641,8 @@ class PPODebugSession:
         if debug_summary.patch_pipeline is not None and dataset is not None:
             patch_cfg = dict(payload.get("patch_config") or {})
             patch_training_cfg = dict(patch_cfg.get("patch_training") or {})
+            from .em_types import EMAssignmentConfig
+
             patch_settings = PatchTrainingSettings(
                 patches_index_path=debug_summary.patch_pipeline.patches_index_path,
                 batch_patches=1,
@@ -657,6 +659,9 @@ class PPODebugSession:
                 agent_mode=str(patch_training_cfg.get("agent_mode", "multi_cell")),
                 after_fill_actions=str(patch_training_cfg.get("after_fill_actions", "add_or_stop")),
                 global_delta_epsilon=float(patch_training_cfg.get("global_delta_epsilon", 1.0e-6)),
+                em_assignment=EMAssignmentConfig.from_mapping(
+                    patch_cfg.get("em_assignment", {})
+                ),
             )
             patch_dataset = PatchDataset(base_config=config, settings=patch_settings, rng=rng)
 

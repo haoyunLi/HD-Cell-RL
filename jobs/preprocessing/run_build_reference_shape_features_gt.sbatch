@@ -20,10 +20,10 @@ echo "Activating conda environment..."
 source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate "$WORK_DIR/Bin2Cell_Validation"
 
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape}"
-PREFIX="${PREFIX:-human_colorectal_gt_shape_reference}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/colorectal_nucleus_based/intermediate/reference_shape}"
+PREFIX="${PREFIX:-colorectal_nucleus_based_gt_shape_reference}"
 BIN_SIZE_UM="${BIN_SIZE_UM:-2.0}"
 EPSILON="${EPSILON:-1e-8}"
 

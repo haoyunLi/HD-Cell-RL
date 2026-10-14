@@ -29,7 +29,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--center-x-column", default="center_x_um")
     parser.add_argument("--center-y-column", default="center_y_um")
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--prefix", default="human_colorectal_patch")
+    parser.add_argument("--prefix", default="colorectal_nucleus_based")
     parser.add_argument("--patch-size-um", type=float, default=64.0)
     parser.add_argument("--stride-um", type=float, default=32.0)
     parser.add_argument("--core-size-um", type=float, default=48.0)

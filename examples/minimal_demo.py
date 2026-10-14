@@ -81,7 +81,7 @@ def main() -> None:
             break
 
     state = env.current_state()
-    state_dir = REPO_ROOT / "workspace_outputs" / "human_colorectal" / "intermediate"
+    state_dir = REPO_ROOT / "workspace_outputs" / "colorectal_nucleus_based" / "intermediate"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "demo_state_snapshot.npz"
     env.save_state_npz(str(state_path))

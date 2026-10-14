@@ -32,14 +32,14 @@ def main():
     print()
 
     # Path to tissue positions data (contains spot coordinates)
-    df_path = 'Human_Colorectal/output/binned_outputs/square_002um/spatial/tissue_positions.parquet'
+    df_path = 'colorectal_nucleus_based/spatial/tissue_positions.parquet'
 
     # Path to the full-resolution microscope image
     img_path = 'Human_Colorectal/input/Visium_HD_Human_Colon_Cancer_tissue_image.btf'
 
     # Output path for the cropped image. Keep generated preprocessing artifacts
     # under the reusable intermediate directory rather than mixing them into repo root.
-    output_path = 'workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal.png'
+    output_path = 'workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png'
 
     # Image format: 'HE' for H&E staining, 'DAPI' for fluorescence
     image_format = 'HE'

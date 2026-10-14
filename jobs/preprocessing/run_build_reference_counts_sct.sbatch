@@ -18,20 +18,22 @@ echo "Activating conda environment..."
 source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate "$WORK_DIR/Bin2Cell_Validation"
 
-mkdir -p workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct
+REFERENCE_DIR="${REFERENCE_DIR:-workspace_outputs/colorectal_nucleus_based/intermediate/reference_scdesign3}"
+SYNTHETIC_ROOT="${SYNTHETIC_ROOT:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3}"
+mkdir -p "$REFERENCE_DIR"
 
 python preprocessing/build_hd_gene_allowlist.py \
-  --selected-features-tsv workspace_outputs/pseudo_human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.selected_features.tsv.gz\
-  --output-txt workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/hd_selected_feature_names_unique.txt
+  --selected-features-tsv workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.selected_features.tsv.gz \
+  --output-txt "$REFERENCE_DIR/hd_selected_feature_names_unique.txt"
 
 python preprocessing/build_reference_counts_from_scrna.py \
-  --matrix-h5-path colorectal_sc_data/CRC_GSE166555_raw_tumor.h5 \
-  --metadata-tsv-path colorectal_sc_data/GSE166555_meta_data_tumor.tsv \
-  --cell-id-column cell_id \
-  --cell-type-column sct_cell_type \
+  --matrix-h5-path "$SYNTHETIC_ROOT/scdesign3_synthetic_counts.h5" \
+  --metadata-tsv-path "$SYNTHETIC_ROOT/synthetic_metadata.tsv" \
+  --cell-id-column Cell \
+  --cell-type-column cell_type \
   --min-cells-per-type 50 \
-  --gene-allowlist-path workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/hd_selected_feature_names_unique.txt \
-  --output-path workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz \
-  --summary-path workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.summary.json
+  --gene-allowlist-path "$REFERENCE_DIR/hd_selected_feature_names_unique.txt" \
+  --output-path "$REFERENCE_DIR/reference_counts_scdesign3_nucleus_based_aligned_hd_overlap_unique.npz" \
+  --summary-path "$REFERENCE_DIR/reference_counts_scdesign3_nucleus_based_aligned_hd_overlap_unique.summary.json"
 
 conda deactivate

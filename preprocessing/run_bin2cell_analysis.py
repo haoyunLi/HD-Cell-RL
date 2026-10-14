@@ -15,9 +15,9 @@ This script:
 Usage:
     python run_bin2cell_analysis.py \
         --pseudo_hd_dir pseudo_visium_hd_outpu_full \
-        --image_path cropped_visium_hd_human_colorectal.png \
+        --image_path workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png \
         --output_dir bin2cell_results_colorectal \
-        --dataset_name human_colorectal \
+        --dataset_name colorectal_nucleus_based \
         --mpp 0.5
 """
 
@@ -89,7 +89,7 @@ def parse_args():
         '--image_path',
         type=str,
         required=True,
-        help='Path to cropped H&E tissue image (e.g., cropped_visium_hd_human_colorectal.png)'
+        help='Path to the cropped H&E tissue image for the current dataset.'
     )
 
     parser.add_argument(
@@ -151,7 +151,7 @@ def parse_args():
 
     add_ppo_format_assignment_eval_args(
         parser,
-        default_eval_run_name='human_colorectal_bin2cell_eval',
+        default_eval_run_name='colorectal_nucleus_based_bin2cell_eval',
         method_label='bin2cell',
     )
 
@@ -161,6 +161,13 @@ def parse_args():
         default=None,
         help='Optional external nuclear-bin CSV/CSV.GZ used to directly populate adata.obs["labels_he"]. '
              'When provided, bin2cell skips its own H&E nuclear segmentation and uses these labels instead.'
+    )
+
+    parser.add_argument(
+        '--patch_local_grid',
+        action='store_true',
+        help='For cropped benchmark patches only: translate array rows/columns to the patch origin '
+             'before Bin2Cell renders its GEX image. Counts, barcodes and assignment logic are unchanged.'
     )
 
     return parser.parse_args()
@@ -227,6 +234,7 @@ def run_ppo_format_bin2cell_evaluation(
         "nms_thresh_gex": float(args.nms_thresh_gex),
         "max_bin_distance": int(args.max_bin_distance),
         "gaussian_sigma": float(args.gaussian_sigma),
+        "patch_local_grid": bool(args.patch_local_grid),
     }
     return run_ppo_format_assignment_evaluation(
         assignments_csv=assignments_csv,
@@ -590,7 +598,7 @@ def generate_gex_image(adata, mpp, gaussian_sigma, stardist_dir):
     return gex_image_path
 
 
-def segment_gex(gex_image_path, stardist_dir, prob_thresh, nms_thresh):
+def segment_gex(gex_image_path, stardist_dir, prob_thresh, nms_thresh, patch_local_grid=False):
     """
     Perform StarDist segmentation on gene expression image (cells).
 
@@ -611,12 +619,28 @@ def segment_gex(gex_image_path, stardist_dir, prob_thresh, nms_thresh):
     gex_labels_path = stardist_dir / "gex.npz"
 
     # Run StarDist segmentation
+    tiling = {}
+    model_image_path = gex_image_path
+    if patch_local_grid:
+        image = cv2.imread(str(gex_image_path), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise ValueError(f'Cannot read patch GEX image: {gex_image_path}')
+        # StarDist's big-image API requires a grid-divisible block at least as
+        # large as the image. Pad only outside the cropped patch and run one
+        # block, retaining the existing model and probability thresholds.
+        block_size = 1 << int(np.ceil(np.log2(max(256, *image.shape[:2]))))
+        padded = cv2.copyMakeBorder(image, 0, block_size - image.shape[0],
+                                    0, block_size - image.shape[1], cv2.BORDER_CONSTANT, value=0)
+        model_image_path = stardist_dir / 'gex_padded.tiff'
+        cv2.imwrite(str(model_image_path), padded)
+        tiling = {'block_size': block_size, 'min_overlap': 0, 'context': 0}
     b2c.stardist(
-        image_path=str(gex_image_path),
+        image_path=str(model_image_path),
         labels_npz_path=str(gex_labels_path),
         stardist_model="2D_versatile_fluo",
         prob_thresh=prob_thresh,
-        nms_thresh=nms_thresh
+        nms_thresh=nms_thresh,
+        **tiling,
     )
 
     logger.info(f"  GEX segmentation complete, saved to {gex_labels_path}")
@@ -1005,6 +1029,20 @@ def main():
 
     # Load data
     adata = load_visium_data(paths['pseudo_hd_dir'], paths['image_path'])
+    if args.patch_local_grid:
+        manifest_path = Path(args.pseudo_hd_dir) / 'patch_manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        row0, _, col0, _ = manifest['context_array_bounds']
+        adata.obs['array_row'] = adata.obs['array_row'].astype(int) - int(row0)
+        adata.obs['array_col'] = adata.obs['array_col'].astype(int) - int(col0)
+        if (adata.obs[['array_row', 'array_col']] < 0).any().any():
+            raise ValueError('Patch-local Bin2Cell coordinates are negative')
+        b2c.check_array_coordinates(
+            adata,
+            row_max=int(manifest['context_array_bounds'][1] - row0 - 1),
+            col_max=int(manifest['context_array_bounds'][3] - col0 - 1),
+        )
+        logger.info('Using patch-local Bin2Cell grid origin (row=%d, col=%d)', row0, col0)
 
     # Filter data
     adata = filter_data(adata)
@@ -1025,7 +1063,8 @@ def main():
 
     # Generate GEX image and perform segmentation
     gex_image_path = generate_gex_image(adata, args.mpp, args.gaussian_sigma, paths['stardist_dir'])
-    gex_labels_path = segment_gex(gex_image_path, paths['stardist_dir'], args.prob_thresh_gex, args.nms_thresh_gex)
+    gex_labels_path = segment_gex(gex_image_path, paths['stardist_dir'], args.prob_thresh_gex,
+                                  args.nms_thresh_gex, patch_local_grid=args.patch_local_grid)
     insert_gex_labels(adata, gex_labels_path, args.mpp)
 
     # Combine labels
@@ -1058,6 +1097,7 @@ def main():
         "nms_thresh_gex": float(args.nms_thresh_gex),
         "max_bin_distance": int(args.max_bin_distance),
         "gaussian_sigma": float(args.gaussian_sigma),
+        "patch_local_grid": bool(args.patch_local_grid),
         "bin_h5ad_path": str(saved_paths['bin_h5ad_path']),
         "cell_h5ad_path": str(saved_paths['cell_h5ad_path']),
         "assignments_csv_path": str(saved_paths['assignments_csv_path']),

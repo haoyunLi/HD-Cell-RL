@@ -29,13 +29,16 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/${USER}/xdg-cache}"
 mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 DEBUG_UI="${DEBUG_UI:-patch}"
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_patch_overfit4_eval_20260612T153201Z}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
 CHECKPOINT_PATH="${CHECKPOINT_PATH:-}"
 RUN_DEVICE="${RUN_DEVICE:-cpu}"
 CELL_ID="${CELL_ID:-}"
 APP_PORT="${APP_PORT:-$(shuf -i 8501-8999 -n 1)}"
 APP_ADDRESS="${APP_ADDRESS:-0.0.0.0}"
 
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_patch_overfit4_eval_* 2>/dev/null | head -n 1 || true)
+fi
 if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
   echo "PPO eval run directory not found: $PPO_EVAL_RUN_DIR" >&2
   exit 1

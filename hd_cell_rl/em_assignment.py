@@ -203,6 +203,8 @@ def run_generalized_em(
     initial_cell_type_posterior: np.ndarray | None = None,
     freeze_cell_type_posterior: bool = False,
     fixed_pair_expression_compatibility: np.ndarray | None = None,
+    fixed_cell_expression_compatibility: np.ndarray | None = None,
+    use_reference_only_cell_profile: bool = False,
     bin_gene_counts: sparse.spmatrix | np.ndarray | None = None,
     reference_theta: np.ndarray | None = None,
 ) -> EMAssignmentResult:
@@ -242,6 +244,26 @@ def run_generalized_em(
         if not np.isfinite(fixed_compatibility).all():
             raise ValueError("fixed_pair_expression_compatibility contains NaN or Inf")
     cell_specific_enabled = bool(config.cell_specific_expression_enabled)
+    if use_reference_only_cell_profile and (
+        not cell_specific_enabled
+        or config.cell_profile_update_damping != 0.0
+        or config.cell_profile_compatibility_mode != "standard"
+        or config.cell_profile_reliability_mode != "nuclear_depth"
+        or fixed_compatibility is not None
+        or fixed_cell_expression_compatibility is not None
+    ):
+        raise ValueError("reference-only profile requires frozen standard nuclear-depth cell profiles without score overrides")
+    fixed_cell_compatibility = None
+    if fixed_cell_expression_compatibility is not None:
+        # Experimental scoring hook: replace only L_cell, not q, lambda or L_type.
+        # A fixed nuclear predictive posterior is incompatible with profile updates.
+        if (not cell_specific_enabled or fixed_compatibility is not None
+                or config.cell_profile_update_damping != 0.0
+                or config.cell_profile_compatibility_mode != "standard"):
+            raise ValueError("fixed cell compatibility requires standard frozen cell-specific profiles")
+        fixed_cell_compatibility = np.asarray(fixed_cell_expression_compatibility, dtype=np.float64)
+        if fixed_cell_compatibility.shape != pair_cell.shape or not np.isfinite(fixed_cell_compatibility).all():
+            raise ValueError("fixed cell compatibility must be finite with shape (N_pairs,)")
     leave_one_out_enabled = (
         cell_specific_enabled
         and config.cell_profile_compatibility_mode == "leave_one_out"
@@ -328,6 +350,15 @@ def run_generalized_em(
             ),
             epsilon=float(config.epsilon),
         )
+        if use_reference_only_cell_profile:
+            # Keep q, actual nuclear totals, prior mass and outer lambda intact.
+            # Remove only the direct nuclear-count addition to the frozen profile.
+            cell_profile = reference_only_cell_profile(
+                reference_theta=theta,
+                cell_type_posterior=q,
+                reference_prior_count=relative_profile_prior_count,
+                epsilon=float(config.epsilon),
+            )
         bin_expression_total = np.asarray(
             expression.sum(axis=1),
             dtype=np.float64,
@@ -410,7 +441,9 @@ def run_generalized_em(
         if cell_specific_enabled:
             if expression is None:
                 raise RuntimeError("cell-specific expression matrix was not initialized")
-            if leave_one_out_enabled:
+            if fixed_cell_compatibility is not None:
+                cell_compatibility = fixed_cell_compatibility
+            elif leave_one_out_enabled:
                 cell_compatibility = (
                     compute_leave_one_out_cell_expression_compatibility(
                         bin_gene_counts=expression,
@@ -766,6 +799,27 @@ def initialize_cell_expression_profiles(
         epsilon=float(epsilon),
     )
     return profile, reliability, nuclear_total, float(reference_prior_count)
+
+
+def reference_only_cell_profile(
+    *, reference_theta: np.ndarray, cell_type_posterior: np.ndarray,
+    reference_prior_count: float, epsilon: float,
+) -> np.ndarray:
+    """The initializer's scRNA prior alone, with identical count-scale smoothing.
+
+    Caller supplies the same normalized theta passed to the nuclear initializer.
+    q is initialized from real nuclear evidence, not GT. This is log of a
+    reference-profile mixture when scored, not the type-only weighted log LL.
+    """
+    theta = np.asarray(reference_theta, dtype=np.float64)
+    q = np.asarray(cell_type_posterior, dtype=np.float64)
+    if theta.ndim != 2 or q.ndim != 2:
+        raise ValueError("reference theta and q must be matrices")
+    if not np.isfinite(reference_prior_count) or reference_prior_count <= 0 or not np.isfinite(epsilon) or epsilon <= 0:
+        raise ValueError("prior count and epsilon must be finite and positive")
+    q = _validate_cell_type_posterior(q, n_cells=q.shape[0], n_types=theta.shape[0])
+    theta = _normalize_reference_theta(theta, n_types=q.shape[1], n_genes=theta.shape[1], epsilon=epsilon)
+    return _normalize_cell_gene_counts(reference_prior_count * (q @ theta), epsilon=epsilon)
 
 
 def estimate_nuclear_heldout_profile_reliability(

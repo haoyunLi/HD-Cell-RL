@@ -25,32 +25,40 @@ export MKL_NUM_THREADS="$THREADS"
 export OMP_NUM_THREADS="$THREADS"
 export NUMEXPR_NUM_THREADS="$THREADS"
 
-PSEUDO_HD_DIR="${PSEUDO_HD_DIR:-colorectal_pseudo_visium_hd_output_full_0.25}"
-IMAGE_PATH="${IMAGE_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal.png}"
-OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/pseudo_human_colorectal/bin2cell_results_colorectal_0.25}"
-DATASET_NAME="${DATASET_NAME:-human_colorectal}"
+PSEUDO_HD_DIR="${PSEUDO_HD_DIR:-colorectal_nucleus_based}"
+IMAGE_PATH="${IMAGE_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png}"
+OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/colorectal_nucleus_based/bin2cell_results}"
+DATASET_NAME="${DATASET_NAME:-colorectal_nucleus_based}"
 MPP="${MPP:-0.2737012522439323}"
 PROB_THRESH_HE="${PROB_THRESH_HE:-0.4}"
 PROB_THRESH_GEX="${PROB_THRESH_GEX:-0.05}"
 NMS_THRESH_GEX="${NMS_THRESH_GEX:-0.5}"
 MAX_BIN_DISTANCE="${MAX_BIN_DISTANCE:-5}"
 GAUSSIAN_SIGMA="${GAUSSIAN_SIGMA:-5.0}"
-EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
+EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
 
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_ppo_eval_20260424T204220Z}"
-EVAL_RUN_NAME="${EVAL_RUN_NAME:-human_colorectal_bin2cell_eval}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
+EVAL_RUN_NAME="${EVAL_RUN_NAME:-colorectal_nucleus_based_bin2cell_eval}"
 EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-runs}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-300}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-first}"
 EVAL_SEED="${EVAL_SEED:-7}"
 PRED_MIN_NUCLEAR_OVERLAP_FRAC="${PRED_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 PRED_MIN_NUCLEAR_OVERLAP_BINS="${PRED_MIN_NUCLEAR_OVERLAP_BINS:-2}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
 GT_MIN_NUCLEAR_OVERLAP_FRAC="${GT_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 GT_MIN_NUCLEAR_OVERLAP_BINS="${GT_MIN_NUCLEAR_OVERLAP_BINS:-2}"
+
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_ppo_eval_* 2>/dev/null | head -n 1 || true)
+fi
+if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
+  echo "Current nucleus-based PPO eval run not found. Set PPO_EVAL_RUN_DIR." >&2
+  exit 1
+fi
 
 echo "PSEUDO_HD_DIR: $PSEUDO_HD_DIR"
 echo "IMAGE_PATH: $IMAGE_PATH"

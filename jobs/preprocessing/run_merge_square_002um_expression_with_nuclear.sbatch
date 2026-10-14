@@ -21,17 +21,17 @@ source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate $WORK_DIR/Bin2Cell_Validation
 
 # Build filtered-bin RL metadata aligned to official square_002um barcodes.
-MATRIX_PATH="${MATRIX_PATH:-colorectal_pseudo_visium_hd_output_full_0.25/filtered_feature_bc_matrix}"
+MATRIX_PATH="${MATRIX_PATH:-colorectal_nucleus_based/filtered_feature_bc_matrix}"
 BARCODES_TSV_PATH="${BARCODES_TSV_PATH:-}"
-OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/pseudo_human_colorectal/intermediate/square_002um_filtered_nuclear}"
-OUTPUT_PREFIX="${OUTPUT_PREFIX:-human_colorectal_square_002um_filtered_rl}"
+OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear}"
+OUTPUT_PREFIX="${OUTPUT_PREFIX:-colorectal_nucleus_based_square_002um_filtered_rl}"
 
 mkdir -p "$OUTPUT_DIR"
 CMD=(
   python3 preprocessing/merge_square_002um_expression_with_nuclear.py
-  --nuclear-annotation-path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins.csv.gz
+  --nuclear-annotation-path workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz
   --matrix-path "$MATRIX_PATH"
-  --tissue-positions-parquet colorectal_pseudo_visium_hd_output_full_0.25/spatial/tissue_positions.parquet
+  --tissue-positions-parquet colorectal_nucleus_based/spatial/tissue_positions.parquet
   --output-dir "$OUTPUT_DIR"
   --prefix "$OUTPUT_PREFIX"
 )

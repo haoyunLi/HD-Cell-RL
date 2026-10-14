@@ -10,12 +10,36 @@ import numpy as np
 import pandas as pd
 
 from preprocessing.merge_square_002um_expression_with_nuclear import (
+    _load_nuclear_claims,
     build_square_002um_rl_metadata,
     write_rl_metadata_outputs,
 )
 
 
 class MergeSquare002umExpressionWithNuclearTests(unittest.TestCase):
+    def test_nuclear_fraction_is_accepted_as_pixel_count_equivalent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "fractional_nuclear.csv.gz"
+            pd.DataFrame(
+                {
+                    "bin_id": ["BC0"],
+                    "barcode": ["BC0"],
+                    "array_row": [0],
+                    "array_col": [0],
+                    "in_tissue": [1],
+                    "x_um": [1.0],
+                    "y_um": [1.0],
+                    "pxl_row_in_fullres": [1.0],
+                    "pxl_col_in_fullres": [1.0],
+                    "cell_id": [10],
+                    "cell_type": ["type"],
+                    "weight": [0.5],
+                    "nuclear_fraction": [0.5],
+                }
+            ).to_csv(path, index=False, compression="gzip")
+            loaded = _load_nuclear_claims(path, microns_per_pixel=1.0)
+            self.assertEqual(int(loaded.loc[0, "nuclear_pixel_count"]), 2)
+
     def test_builds_all_bin_metadata_with_left_joined_nuclear_info(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

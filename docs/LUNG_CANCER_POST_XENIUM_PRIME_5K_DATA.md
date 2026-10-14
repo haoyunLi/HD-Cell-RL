@@ -1,0 +1,49 @@
+# Lung cancer Experiment 2: paired Xenium and Visium HD files
+
+These are the two 10x Genomics datasets from Experiment 2 of the post-Xenium technical note. The Xenium Prime 5K assay was performed first; the corresponding Visium HD assay was performed afterward. They are separate modalities, not interchangeable expression matrices. Local paths below are relative to the `HD-Cell-RL` repository root.
+
+The HD entry here is the **post-Xenium Prime 5K** sample, not the separate HD-only control from Experiment 2.
+
+| Modality | 10x sample ID | Local directory | Official dataset page |
+| --- | --- | --- | --- |
+| Visium HD | `Visium_HD_Human_Lung_Cancer_post_Xenium_Prime_5K_Experiment2` | `data/paired_hd_xenium/lung_cancer_experiment2/visium_hd/` | [Visium HD post-Xenium Experiment 2](https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-lung-cancer-post-xenium-expt) |
+| Xenium Prime 5K | `Xenium_Prime_Human_Lung_Cancer_FFPE` | `data/paired_hd_xenium/lung_cancer_experiment2/xenium/` | [Xenium lung cancer Experiment 2](https://www.10xgenomics.com/datasets/xenium-human-lung-cancer-post-xenium-technote) |
+
+The Visium HD directory separates 10x `input/` files (images, alignment, FASTQs, probe set) from `output/` files (Space Ranger results). The Xenium directory has `input/` (gene panel), `output/` (Xenium bundles), and `supplemental/` (post-Xenium H&E image and alignment CSV). Original 10x filenames are retained. The benchmark also extracts only the required matrices, positions, boundaries, and metadata into modality-specific `extracted/` or `binned_outputs/` directories; the original archives are retained.
+
+The HD `alignment_file.json` and Xenium `he_imagealignment.csv` are kept with their respective modalities. Do not assume that the two expression coordinate systems are already aligned for cell-level evaluation; verify the image and coordinate transform before making cross-modality comparisons.
+
+## Paired real-data patch pilot
+
+The first pilot is a 100 × 100 HD 2-µm-bin core (about 200 × 200 µm) at array rows 1840–1939 and columns 1240–1339, with a 20-bin/40-µm context halo. It is a pipeline validation and a first real-data comparison, **not** a whole-slide or multi-patch result. All methods use the same HD matrix, H&E crop, StarDist H&E nuclear seeds, physical barcodes, and core evaluation region. Xenium is used only after predictions are frozen, as an imperfect segmentation/expression proxy; it is never used to infer ownership or tune EM parameters in this pilot.
+
+The independent expression reference is the author-annotated primary-lung portion of [GSE131907](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE131907), described in [the source publication](https://www.nature.com/articles/s41467-020-16164-1). `scripts/convert_lung_gse131907_rds_to_10x.R` only changes the published RDS storage into raw-count 10x H5 and an author-label metadata TSV; it does not infer new cell annotations or aggregate cell types. The *unchanged* `preprocessing/build_reference_counts_from_scrna.py` then performs the same per-cell-type raw-count aggregation as in the pseudo benchmark. An independent R aggregation gave exactly the same type/gene counts (maximum absolute count difference 0). The output has 100,150 annotated cells, eight author cell classes, and 16,748 genes overlapping the HD matrix. This reference is supplied to EM only; the STCS run remains reference-free as in the existing pipeline.
+
+### Coordinate and barcode QC
+
+- The HD H&E full-resolution scale is **0.2736968928981889 µm/pixel**. The official HD 2-µm bin diameter is 7.30735 H&E pixels, and the measured adjacent-bin steps are 1.99918 and 1.99958 µm. EM measures candidate distance from the official bin-center positions in µm, using the existing `configs/episode_build.template.yaml:environment.max_center_distance_um = 20`, not `r_max_um`.
+- Xenium cell and transcript coordinates are physical µm in the Xenium/DAPI frame. The Xenium DAPI pixel scale is **0.2125 µm/pixel**. The official `he_imagealignment.csv` maps H&E pixels to DAPI pixels. Evaluation therefore divides Xenium µm by 0.2125, applies the *inverse* official affine transform, and compares in the full H&E frame. The HD array grid to H&E transform is projective, so the pilot does not approximate it with a global affine transform.
+- The H&E images from both modalities have the same raster in this matched acquisition, but that does not make their expression coordinates interchangeable. The alignment overlay is saved at `runs/benchmarks/lung_paired_patch_pilot/alignment_overlay.png`; the arithmetic checks are in `alignment_qc.json`.
+- The HD H5 columns are not in the same order as the positions Parquet rows. The extractor joins by 10x barcode and checks the join. The evaluator rejects duplicate ownership and method-export row/column coordinates that disagree with the official barcode lookup.
+
+### Frozen methods and evaluation
+
+The method implementations were reused rather than rewritten: `preprocessing/run_bin2cell_analysis.py`, `preprocessing/run_stcs_analysis.py` with checked-in upstream STCS at commit `7cdd74dfc3750d03a73490b193ed0fb0f792d768`, and `hd_cell_rl/em_assignment.py`. Only real-data preparation, a format adapter for the reference, and a common Xenium evaluator were added. Bin2Cell retains `max_bin_distance=5` bins, Gaussian σ=5, GEX StarDist probability/NMS thresholds 0.05/0.5; STCS retains S=5, λ=0.5, its reference-free mode, and its existing normalization. EM retains the prior cross-capture diagnostic setting α=1, β=1.5, κ=2, profile update damping=0, responsibility damping=0.5, no background, and positive-expression filtering of nonnuclear bins. Distance-only changes only β to 0. The separate nucleus-only control uses the same seed file. These are frozen **pilot settings**, not fitted to Xenium.
+
+The common evaluator follows the three-stage matching structure described in the [STCS paper, Cell-level Alignment Methods](https://www.biorxiv.org/content/10.64898/2026.02.26.708370v1.full): StarDist nuclear-pixel majority vote into registered Xenium polygons, predicted-cell α-shape polygons at α=0.05, and reciprocal maximum-intersection matching. The checked-in upstream STCS clone at the stated commit does not contain a separate matched-Xenium evaluator, so this is a Methods-based reimplementation, not a claim to execute an upstream evaluation script. Deliberate pilot deviations are recorded in `evaluation_protocol.json`: native Xenium cell-boundary polygons rather than the paper's convex-hull/α-shape reconstruction from Xenium spatial units; a 1-µm footprint buffer around predicted bin-center polygons; a variance-based top-2000 shared-gene screen rather than Seurat-v3 HVGs; one patch rather than the whole slide; and no CellTypist cell-type metrics. Accordingly, the pilot's gene correlations and IoUs must **not** be presented as direct reproductions of the paper's reported numbers.
+
+The results table is `runs/benchmarks/lung_paired_patch_pilot/evaluation/native_xenium_boundaries/method_comparison.csv`; the matched-pair detail is `per_cell_matched.csv`. Conditional mean IoU, zero-filled mean over all 445 core seed cells, and mean IoU on the exact cell pairs matched by *every* method are all reported. The distinction matters because methods differ in match coverage. The same evaluator also checks that retained nuclear bins never switch owner and reports each method's missing seed bins; Bin2Cell's native positive-count filtering can omit zero-count seeds without reassigning them.
+
+| Frozen pilot method | Reciprocal matches | Conditional mean IoU | Mean IoU, unmatched core cells = 0 | Mean IoU on 264 common matches |
+| --- | ---: | ---: | ---: | ---: |
+| Nucleus only | 421 | 0.447 | 0.422 | 0.457 |
+| Bin2Cell | 412 | 0.546 | 0.506 | 0.568 |
+| STCS | 413 | 0.538 | 0.499 | 0.562 |
+| Distance-only EM | 416 | 0.542 | 0.507 | 0.577 |
+| Current EM | 274 | 0.378 | 0.233 | 0.380 |
+
+The current EM's expression term is associated with much poorer boundary agreement and many disconnected hard-assignment islands on this patch (1,282 versus 9 for distance-only). Its *conditional* exploratory gene-rank correlation initially looks higher, but only 86 EM matches have enough both-nonzero genes for a defined correlation. When restricted to the same 16 cells with a valid correlation under **all five** methods, EM is 0.097 and Bin2Cell is 0.174. Thus the conditional gene number is a selection effect, not evidence that EM better preserves expression. This contrast is diagnostic, not a reason to retune weights on the same evaluation patch. The [STCS paper](https://www.biorxiv.org/content/10.64898/2026.02.26.708370v1.full) reports a slight advantage for STCS on its whole-slide evaluation; this pilot has Bin2Cell and STCS close together, with their order reversed. The different evaluation scope and polygon/HVG definitions above prevent a direct numeric replication claim.
+
+This paired assay changes tissue, platform history, reference biology, and the ground-truth proxy relative to the colorectal pseudo experiment. Holding algorithm parameters and adapters steady improves interpretability, but it does not make absolute pseudo and real IoU values directly commensurate. A multi-patch, spatially separated evaluation is needed before any general performance claim.
+
+For context, the earlier 16-patch real-scRNA colorectal pseudo benchmark (`runs/benchmarks/real_scrna_unique_background_16patch_20260922/benchmark/method_comparison.csv`, `modeled_only`) ranked Bin2Cell 0.857, distance-only 0.814, frozen EM 0.785, and STCS 0.666 by its *pseudo-bin GT* IoU. Here STCS moves much closer to Bin2Cell/distance-only while EM falls behind. The change of ranking, not the difference in absolute IoU, is the useful signal for diagnosing pseudo-data generalization.

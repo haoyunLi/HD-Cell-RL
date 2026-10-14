@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import OrderedDict
 import importlib
 import importlib.util
 import sys
@@ -86,6 +87,30 @@ def _obs_array(value, dtype):
     if hasattr(value, "detach") and hasattr(value, "cpu"):
         return value.detach().cpu().numpy().astype(dtype, copy=False)
     return np.asarray(value, dtype=dtype)
+
+
+def _with_non_nuclear_shared_owner(context):
+    """Ordinary ownership is distinct from confident nuclear membership.
+
+    Inject a minimal EM initialization fixture for the shared bin; the test
+    continues to exercise exactly the same discrete REPLACE reward.
+    """
+    cells = []
+    for cell in context.cells:
+        seed = np.asarray(cell.initial_membership_mask).copy()
+        for i, barcode in enumerate(cell.candidate_bin_ids):
+            if barcode == "shared":
+                seed[i] = 0
+        cells.append(replace(cell, initial_membership_mask=seed))
+    owner = tuple(c.cell_id for c in cells).index("b")
+    result = types.SimpleNamespace(
+        patch_id=context.patch_id, cell_ids=tuple(c.cell_id for c in cells),
+        barcode_ids=("shared",), top1_cell_index=np.asarray([owner], dtype=np.int64),
+        is_nuclear_locked=np.asarray([False]), is_ambiguous=np.asarray([True]),
+        n_bins=1, converged=True, iterations=(), candidate_max_distance_um=20.,
+        n_disconnected_hard_islands=0, validate=lambda: None,
+    )
+    return replace(context, cells=tuple(cells), em_assignment=result)
 
 
 class PatchTrainingTests(unittest.TestCase):
@@ -332,6 +357,7 @@ class PatchTrainingTests(unittest.TestCase):
             after_fill_actions="replace_only",
             stop_action_mode="auto_no_improve_after_filled",
         )
+        patch = _with_non_nuclear_shared_owner(patch)
         env = self.patch_training.TorchSingleAgentPatchEnv(patch, device=torch.device("cpu"))
         obs, _ = env.reset()
         features = _obs_array(obs["action_features"], np.float32)
@@ -393,6 +419,7 @@ class PatchTrainingTests(unittest.TestCase):
             after_fill_actions="replace_only",
             stop_action_mode="auto_no_improve_after_filled",
         )
+        patch = _with_non_nuclear_shared_owner(patch)
         env = self.patch_training.TorchSingleAgentPatchEnv(patch, device=torch.device("cpu"))
         obs, _ = env.reset()
         features = _obs_array(obs["action_features"], np.float32)
@@ -426,6 +453,7 @@ class PatchTrainingTests(unittest.TestCase):
             after_fill_actions="replace_only",
             stop_action_mode="auto_no_improve_after_filled",
         )
+        patch = _with_non_nuclear_shared_owner(patch)
         env = self.patch_training.TorchSingleAgentPatchEnv(patch, device=torch.device("cpu"))
         obs, _ = env.reset()
         features = _obs_array(obs["action_features"], np.float32)
@@ -491,6 +519,96 @@ class PatchTrainingTests(unittest.TestCase):
         masks = env.final_masks()
         self.assertEqual(int(masks["a"].sum()), 2)
         self.assertEqual(int(masks["b"].sum()), 2)
+
+    def test_multi_cell_global_delta_rollout_captures_replace_trace(self) -> None:
+        import torch
+        if not hasattr(torch, "nn") or not hasattr(torch, "distributions"):
+            self.skipTest("torch is required for global-delta patch rollout")
+
+        class FirstActionModel(torch.nn.Module):
+            def forward(self, global_features, action_features, action_mask):
+                logits = torch.full(action_mask.shape, -10.0, device=action_mask.device)
+                logits[:, 0] = 0.0
+                if int(action_mask.shape[1]) > 1:
+                    logits[:, 1] = torch.where(
+                        action_mask[:, 1],
+                        torch.as_tensor(10.0, device=action_mask.device),
+                        torch.as_tensor(-10.0, device=action_mask.device),
+                    )
+                return torch.distributions.Categorical(logits=logits), torch.zeros(
+                    global_features.shape[0], device=global_features.device
+                )
+
+        a = _ctx(self.ppo_state.EpisodeContext, "a", ["a_seed", "shared"], [(0, 0), (2, 0)], [1, 0])
+        b = _ctx(self.ppo_state.EpisodeContext, "b", ["b_seed", "shared"], [(10, 0), (2, 0)], [1, 1])
+        a = replace(a, w4=0.0, base_penalty=np.asarray([0.0, 0.0], dtype=np.float32))
+        b = replace(b, w4=0.0, base_penalty=np.asarray([0.0, 10.0], dtype=np.float32))
+        patch = self.patch_training.PatchContext(
+            patch_id="p_multi_trace",
+            cells=(a, b),
+            core_cell_ids=("a", "b"),
+            margin_cell_ids=(),
+            outer_bounds=self.patch_training.PatchBounds(-5, 12, -5, 5),
+            core_bounds=self.patch_training.PatchBounds(-5, 12, -5, 5),
+            max_steps=5,
+            score_normalization="mean_expression_bins",
+            force_fill_expression_bins=True,
+            force_fill_target_barcodes=("a_seed", "b_seed", "shared"),
+            agent_mode="multi_cell_global_delta",
+            after_fill_actions="replace_only",
+        )
+
+        patch = _with_non_nuclear_shared_owner(patch)
+        trajectories, _timing = self.patch_training.collect_patch_trajectories_batched(
+            contexts=[patch],
+            model=FirstActionModel(),
+            device=torch.device("cpu"),
+            rng=np.random.default_rng(7),
+            policy_mode="greedy",
+            rollout_backend="torch_gpu",
+            capture_trace=True,
+        )
+
+        trajectory = trajectories[0]
+        self.assertIsNotNone(trajectory.initial_masks)
+        self.assertEqual(int(trajectory.initial_masks["a"].sum()), 1)
+        self.assertEqual(int(trajectory.initial_masks["b"].sum()), 2)
+        self.assertEqual(len(trajectory.steps), 1)
+        self.assertEqual(len(trajectory.steps[0].action_events), 1)
+        event = trajectory.steps[0].action_events[0]
+        self.assertEqual(event.action_type, "replace")
+        self.assertEqual(event.barcode, "shared")
+        self.assertEqual(event.old_cell_id, "b")
+        self.assertEqual(event.cell_id, "a")
+        self.assertTrue(event.applied)
+        self.assertFalse(bool(trajectory.steps[0].action_mask[0]))
+        components = trajectory.steps[0].objective_delta_components
+        self.assertIsNotNone(components)
+        self.assertAlmostEqual(
+            float(components["component_sum"]),
+            float(trajectory.steps[0].reward),
+            places=6,
+        )
+        self.assertAlmostEqual(
+            float(components["reward_residual"]),
+            0.0,
+            places=6,
+        )
+        self.assertIsNotNone(trajectory.steps[0].available_action_count)
+        self.assertGreater(int(trajectory.steps[0].available_action_count), 0)
+        self.assertIsNotNone(trajectory.steps[0].chosen_action_reward)
+        self.assertIsNotNone(trajectory.steps[0].best_available_action_reward)
+        self.assertGreaterEqual(
+            int(trajectory.steps[0].chosen_action_reward_rank),
+            1,
+        )
+        self.assertEqual(trajectory.steps[0].phase, "postfill")
+        self.assertEqual(trajectory.steps[0].outcome, "applied")
+        self.assertIsNotNone(trajectory.initial_patch_score)
+        self.assertEqual(trajectory.initial_owned_target_count, 3)
+        self.assertEqual(trajectory.target_count, 3)
+        self.assertEqual(int(trajectory.final_masks["a"].sum()), 2)
+        self.assertEqual(int(trajectory.final_masks["b"].sum()), 1)
 
     def test_joint_rollout_can_capture_compact_owner_trace(self) -> None:
         import torch
@@ -573,6 +691,7 @@ class PatchTrainingTests(unittest.TestCase):
             agent_mode="multi_cell_joint_global_delta",
             after_fill_actions="replace_only",
         )
+        patch = _with_non_nuclear_shared_owner(patch)
         env = self.patch_training.TorchJointPatchEnv(patch, device=torch.device("cpu"))
         _obs, _info = env.reset()
         observations = env.joint_observations()
@@ -639,6 +758,7 @@ class PatchTrainingTests(unittest.TestCase):
             agent_mode="multi_cell_joint_global_delta",
             after_fill_actions="replace_only",
         )
+        patch = _with_non_nuclear_shared_owner(patch)
         env = self.patch_training.TorchJointPatchEnv(patch, device=torch.device("cpu"))
         _obs, _info = env.reset()
         observations = env.joint_observations()
@@ -796,11 +916,12 @@ class PatchTrainingTests(unittest.TestCase):
             max_steps_per_patch=5,
             score_normalization="sqrt_core_cells",
             cache_patch_contexts=True,
+            patch_context_cache_size=128,
         )
         fake_cells = FakeCellDataset(self.ppo_state.EpisodeContext)
         dataset._cell_dataset = fake_cells
         dataset._artifact_by_cell = {"a": "artifact"}
-        dataset._context_cache = {}
+        dataset._context_cache = OrderedDict()
         row = types.SimpleNamespace(
             patch_id="p_cached_load",
             patch_cell_ids='["a"]',

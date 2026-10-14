@@ -1,5 +1,5 @@
 run:
-  name: human_colorectal_full_grpo
+  name: colorectal_nucleus_based_full_grpo
   output_root: runs
   seed: 7
   device: auto
@@ -11,14 +11,14 @@ run:
   training_mode: full_grpo
 
 inputs:
-  episodes_index_path: runs/example_episode_build_run/episodes_index.csv
+  episodes_index_path: runs/colorectal_nucleus_based_episode_build_20260824T194025Z/episodes_index.csv
   reference:
     path: workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz
     format: npz
     array_key: reference_counts
     genes_key: genes
   nuclei:
-    path: workspace_outputs/pseudo_human_colorectal/intermediate/human_colorectal_nuclei.parquet
+    path: workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.parquet
     format: auto
     columns:
       cell_id: cell_id

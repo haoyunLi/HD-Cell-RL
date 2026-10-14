@@ -9,7 +9,7 @@ Submit jobs from the repository root. Scheduler stdout and stderr are written to
 - `run_crop_visium_hd.sbatch`
 - `run_cellpose_sam.sbatch`
 - `run_pixel_to_square_002um_bins.sbatch`
-- `run_pseudo_pixel_to_square_002um_bins.sbatch`
+- `run_pseudo_pixel_to_square_002um_bins.sbatch` (exports the current nucleus-based GT parquet to evaluation CSVs)
 - `run_merge_square_002um_expression_with_nuclear.sbatch`
 - `run_build_nuclei_table.sbatch`
 - `run_build_reference_counts_sct.sbatch`

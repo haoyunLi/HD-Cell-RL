@@ -26,6 +26,7 @@ class PatchTrainingSettings:
     reward_backend: str = "standard"
     stcs_reward_config: dict[str, Any] | None = None
     cache_patch_contexts: bool = False
+    patch_context_cache_size: int = 128
     competition_margin_enabled: bool = True
     force_fill_expression_bins: bool = False
     fill_target: str = "reachable_expression_bins"
@@ -118,6 +119,11 @@ class PatchStep:
     raw_patch_score_after: float | None = None
     owned_target_count_after: int | None = None
     target_count: int | None = None
+    objective_delta_components: dict[str, float] | None = None
+    available_action_count: int | None = None
+    chosen_action_reward: float | None = None
+    best_available_action_reward: float | None = None
+    chosen_action_reward_rank: int | None = None
 
 
 @dataclass(frozen=True)

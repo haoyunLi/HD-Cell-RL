@@ -100,6 +100,11 @@ class TorchPatchEnv:
             dtype=torch.bool,
         )
         self._configure_em_initialization()
+        # Nuclear protection is independent of EM, including no-EM ablations.
+        for cell in context.cells:
+            for bin_idx in np.flatnonzero(np.asarray(cell.initial_membership_mask) > 0):
+                barcode = self._barcode_index_by_key[str(cell.candidate_bin_ids[int(bin_idx)])]
+                self._replace_allowed_by_barcode[int(barcode)] = False
         self._force_fill_target_indices_set = {
             int(self._barcode_index_by_key[str(barcode)])
             for barcode in context.force_fill_target_barcodes
@@ -1451,6 +1456,121 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
     def patch_score(self) -> float:
         return float(self._global_raw_objective().detach().cpu().item() / self._score_denominator())
 
+    def objective_components(self) -> dict[str, float]:
+        """Decompose the current normalized global objective without changing state."""
+        if self._reward_backend == "stcs":
+            total = float(self._global_raw_objective().detach().cpu().item())
+            denominator = self._score_denominator()
+            return {
+                "stcs": total / denominator,
+                "numeric_residual": 0.0,
+                "total": total / denominator,
+            }
+
+        torch = self._torch
+        raw = {
+            "expression_confidence": 0.0,
+            "expression_compatibility": 0.0,
+            "distance_penalty": 0.0,
+            "overlap_penalty": 0.0,
+            "neighbor_support": 0.0,
+            "shape_prior": 0.0,
+            "penalty_rounding_residual": 0.0,
+        }
+        for cell_idx, ctx in enumerate(self._ctx.cells):
+            mask = self._membership_masks[int(cell_idx)]
+            if not bool(torch.any(mask).detach().cpu().item()):
+                continue
+            posterior = torch.softmax(self._score_sums[int(cell_idx)], dim=0)
+            confidence = (
+                torch.max(posterior)
+                if int(posterior.numel()) > 0
+                else torch.zeros((), device=self._device)
+            )
+            expr_conf_sum = torch.sum(self._expression_conf64[int(cell_idx)][mask])
+            raw["expression_confidence"] += float(
+                (
+                    float(ctx.w1)
+                    * confidence.to(dtype=torch.float32)
+                    * expr_conf_sum.to(dtype=torch.float32)
+                )
+                .detach()
+                .cpu()
+                .item()
+            )
+            if float(ctx.w5) != 0.0:
+                weighted_ll = (
+                    self._ll64[int(cell_idx)]
+                    * self._expression_conf64[int(cell_idx)].reshape(-1, 1)
+                )
+                raw["expression_compatibility"] += float(
+                    (
+                        float(ctx.w5)
+                        * torch.sum(
+                            torch.mv(weighted_ll[mask], posterior).to(
+                                dtype=torch.float32
+                            )
+                        )
+                    )
+                    .detach()
+                    .cpu()
+                    .item()
+                )
+
+            mask_np = mask.detach().cpu().numpy().astype(bool, copy=False)
+            distance = -float(ctx.w2) * float(
+                np.sum(np.asarray(ctx.p_dis, dtype=np.float64)[mask_np])
+            )
+            overlap = -float(ctx.w3) * float(
+                np.sum(np.asarray(ctx.p_overlap, dtype=np.float64)[mask_np])
+            )
+            actual_penalty = -float(
+                torch.sum(self._base_penalty32[int(cell_idx)][mask])
+                .detach()
+                .cpu()
+                .item()
+            )
+            raw["distance_penalty"] += distance
+            raw["overlap_penalty"] += overlap
+            raw["penalty_rounding_residual"] += actual_penalty - distance - overlap
+
+            support = self._compute_neighbor_support(
+                cell_idx=int(cell_idx),
+                mask=mask,
+            )
+            raw["neighbor_support"] += float(
+                (
+                    float(ctx.w4)
+                    * torch.sum(support[mask]).to(dtype=torch.float32)
+                )
+                .detach()
+                .cpu()
+                .item()
+            )
+            state = self._shape_states[int(cell_idx)]
+            if state is not None and float(ctx.shape_prior_weight) > 0.0:
+                raw["shape_prior"] += float(
+                    (
+                        float(ctx.shape_prior_weight)
+                        * state.current_reward.to(dtype=torch.float32)
+                    )
+                    .detach()
+                    .cpu()
+                    .item()
+                )
+
+        denominator = self._score_denominator()
+        components = {
+            key: float(value / denominator)
+            for key, value in raw.items()
+        }
+        total = float(
+            self._global_raw_objective().detach().cpu().item() / denominator
+        )
+        reconstructed = float(sum(components.values()))
+        components["numeric_residual"] = float(total - reconstructed)
+        components["total"] = total
+        return components
 
     def _build_observation(self) -> dict[str, Any]:
         summaries = [
@@ -1730,11 +1850,13 @@ class TorchSingleAgentPatchEnv(TorchPatchEnv):
         }
 
     def _score_denominator(self) -> float:
+        # Global-delta scores include core AND margin cells. Retain legacy
+        # *_core_cells aliases for existing configs without changing values.
         n_cells = max(1, len(self._ctx.cells))
         mode = str(self._ctx.score_normalization)
-        if mode == "sum_core_cells":
+        if mode in {"sum_core_cells", "sum_patch_cells"}:
             return 1.0
-        if mode == "sqrt_core_cells":
+        if mode in {"sqrt_core_cells", "sqrt_patch_cells"}:
             return float(np.sqrt(n_cells))
         if mode == "mean_expression_bins":
             return float(max(1, self._force_fill_target_count()))
@@ -1955,6 +2077,8 @@ class TorchJointPatchEnv(TorchSingleAgentPatchEnv):
             "truncated": bool(self._truncated),
             "patch_score": float(raw_total / self._score_denominator()),
             "raw_total_core_reward": float(raw_total),
+            "raw_total_patch_objective": float(raw_total),
+            "objective_cell_scope": "core_and_margin",
             "n_core_cells": int(len(self._core_cell_ids)),
             "n_margin_cells": int(max(0, len(self._ctx.cells) - len(self._core_cell_ids))),
             "n_patch_cells": int(len(self._ctx.cells)),

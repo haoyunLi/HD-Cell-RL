@@ -38,13 +38,13 @@ EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-}"
 EPISODE_RUN_DIR="${EPISODE_RUN_DIR:-}"
 BATCH_CELLS="${BATCH_CELLS:-}"
 MAX_UPDATES="${MAX_UPDATES:-}"
-RUN_NAME="${RUN_NAME:-human_colorectal_ppo}"
+RUN_NAME="${RUN_NAME:-colorectal_nucleus_based_ppo}"
 
 if [ -z "$EPISODES_INDEX_PATH" ]; then
   if [ -n "$EPISODE_RUN_DIR" ]; then
     EPISODES_INDEX_PATH="${EPISODE_RUN_DIR}/episodes_index.csv"
   else
-    LATEST_EPISODE_RUN=$(ls -dt runs/human_colorectal_episode_build_* 2>/dev/null | head -n 1 || true)
+    LATEST_EPISODE_RUN=$(ls -dt runs/colorectal_nucleus_based_episode_build_* 2>/dev/null | head -n 1 || true)
     if [ -n "$LATEST_EPISODE_RUN" ]; then
       EPISODES_INDEX_PATH="${LATEST_EPISODE_RUN}/episodes_index.csv"
     fi

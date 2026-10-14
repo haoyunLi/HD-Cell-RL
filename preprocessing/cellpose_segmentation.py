@@ -323,10 +323,10 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Run Cellpose-SAM cell segmentation on Visium HD images')
     parser.add_argument('--img_path', type=str,
-                       default='cropped_visium_hd_human_colorectal.png',
+                       default='workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png',
                        help='Path to input image')
     parser.add_argument('--output_dir', type=str,
-                       default='cellpose_sam_human_colorectal_output',
+                       default='workspace_outputs/colorectal_nucleus_based/intermediate/cellpose_sam_colorectal_nucleus_based_output',
                        help='Output directory for segmentation results')
     args = parser.parse_args()
 

@@ -23,7 +23,7 @@ base_config_overrides:
     patience: 5
 
 run:
-  name: human_colorectal_patch_overfit4_stcs_reward
+  name: colorectal_nucleus_based_patch_overfit4_stcs_reward
   output_root: runs
   seed: 7
   device: cuda
@@ -35,7 +35,7 @@ run:
   warm_start_checkpoint: ""
 
 patch_training:
-  patches_index_path: runs/human_colorectal_patch_episode_build/human_colorectal_patches_overfit4_64um_index.csv
+  patches_index_path: runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_overfit4_64um_index.csv
   max_steps_per_patch: 1024
   margin_cells_compete: true
   use_core_cells_for_score: true

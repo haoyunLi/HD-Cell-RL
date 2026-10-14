@@ -33,14 +33,25 @@ mkdir -p "$PYTHONPYCACHEPREFIX" "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 PATCH_CONFIG="${PATCH_CONFIG:-configs/ppo_training.patch_full_grpo.yaml}"
 BASE_PPO_CONFIG="${BASE_PPO_CONFIG:-configs/ppo_training.full_grpo.yaml}"
-PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/human_colorectal_patch_episode_build/human_colorectal_patches_index.csv}"
-EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-runs/human_colorectal_episode_build_20260529T212230Z/episodes_index.csv}"
-RUN_NAME="${RUN_NAME:-human_colorectal_patch_full_grpo}"
+PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_index.csv}"
+EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-}"
+RUN_NAME="${RUN_NAME:-colorectal_nucleus_based_patch_full_grpo}"
 RUN_DEVICE="${RUN_DEVICE:-cpu}"
 BATCH_PATCHES="${BATCH_PATCHES:-8}"
 MAX_UPDATES="${MAX_UPDATES:-}"
 MAX_STEPS_PER_PATCH="${MAX_STEPS_PER_PATCH:-300}"
-WARM_START_CHECKPOINT="${WARM_START_CHECKPOINT:-runs/human_colorectal_full_grpo_20260508T171415Z/checkpoints/best_model.pt}"
+WARM_START_CHECKPOINT="${WARM_START_CHECKPOINT:-}"
+
+if [[ -z "$EPISODES_INDEX_PATH" ]]; then
+  LATEST_EPISODE_RUN=$(ls -dt runs/colorectal_nucleus_based_episode_build_* 2>/dev/null | head -n 1 || true)
+  if [[ -n "$LATEST_EPISODE_RUN" ]]; then
+    EPISODES_INDEX_PATH="$LATEST_EPISODE_RUN/episodes_index.csv"
+  fi
+fi
+if [[ ! -f "$EPISODES_INDEX_PATH" ]]; then
+  echo "Current nucleus-based episode index not found. Set EPISODES_INDEX_PATH." >&2
+  exit 1
+fi
 
 if [ ! -f "$PATCHES_INDEX_PATH" ]; then
   echo "Patch index not found: $PATCHES_INDEX_PATH"
@@ -81,8 +92,7 @@ run = cfg.setdefault("run", {})
 run["name"] = run_name
 run["device"] = run_device
 run["batch_patches"] = int(batch_patches)
-if warm_start:
-    run["warm_start_checkpoint"] = str(Path(warm_start).resolve())
+run["warm_start_checkpoint"] = str(Path(warm_start).resolve()) if warm_start else ""
 if max_updates:
     run["max_updates"] = int(max_updates)
 patch = cfg.setdefault("patch_training", {})

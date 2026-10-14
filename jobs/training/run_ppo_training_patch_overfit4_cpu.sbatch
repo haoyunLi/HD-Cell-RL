@@ -34,9 +34,9 @@ mkdir -p "$PYTHONPYCACHEPREFIX" "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 PATCH_CONFIG="${PATCH_CONFIG:-configs/ppo_training.patch_overfit4.yaml}"
 BASE_PPO_CONFIG="${BASE_PPO_CONFIG:-configs/ppo_training.full_grpo.yaml}"
-PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/human_colorectal_patch_episode_build/human_colorectal_patches_overfit4_64um_index.csv}"
-EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-runs/human_colorectal_episode_build_20260529T212230Z/episodes_index.csv}"
-RUN_NAME="${RUN_NAME:-human_colorectal_patch_overfit4}"
+PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_overfit4_64um_index.csv}"
+EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-}"
+RUN_NAME="${RUN_NAME:-colorectal_nucleus_based_patch_overfit4}"
 RUN_DEVICE="${RUN_DEVICE:-cuda}"
 ROLLOUT_DEVICES="${ROLLOUT_DEVICES:-cuda:0,cuda:1,cuda:2,cuda:3}"
 ROLLOUT_WORKER_MODE="${ROLLOUT_WORKER_MODE:-process}"
@@ -47,6 +47,17 @@ ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-torch_gpu}"
 CACHE_PATCH_CONTEXTS="${CACHE_PATCH_CONTEXTS:-true}"
 COMPETITION_MARGIN_ENABLED="${COMPETITION_MARGIN_ENABLED:-false}"
 WARM_START_CHECKPOINT="${WARM_START_CHECKPOINT:-}"
+
+if [[ -z "$EPISODES_INDEX_PATH" ]]; then
+  LATEST_EPISODE_RUN=$(ls -dt runs/colorectal_nucleus_based_episode_build_* 2>/dev/null | head -n 1 || true)
+  if [[ -n "$LATEST_EPISODE_RUN" ]]; then
+    EPISODES_INDEX_PATH="$LATEST_EPISODE_RUN/episodes_index.csv"
+  fi
+fi
+if [[ ! -f "$EPISODES_INDEX_PATH" ]]; then
+  echo "Current nucleus-based episode index not found. Set EPISODES_INDEX_PATH." >&2
+  exit 1
+fi
 
 if [ ! -f "$PATCHES_INDEX_PATH" ]; then
   echo "Fixed overfit patch index not found: $PATCHES_INDEX_PATH" >&2

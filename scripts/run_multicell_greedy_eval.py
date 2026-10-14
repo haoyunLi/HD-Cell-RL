@@ -142,7 +142,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="workspace_outputs/pseudo_human_colorectal/multicell_greedy",
+        default="workspace_outputs/colorectal_nucleus_based/multicell_greedy",
         help="Directory root for generated multi-cell greedy assignments.",
     )
     parser.add_argument(
@@ -183,7 +183,7 @@ def _parse_args() -> argparse.Namespace:
     )
     add_ppo_format_assignment_eval_args(
         parser,
-        default_eval_run_name="human_colorectal_multicell_greedy_eval",
+        default_eval_run_name="colorectal_nucleus_based_multicell_greedy_eval",
         method_label="multi-cell greedy",
     )
     args = parser.parse_args()

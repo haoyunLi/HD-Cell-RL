@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import datetime as dt
 import json
+import shutil
 from pathlib import Path
 import sys
 from typing import Any
@@ -31,6 +32,7 @@ from hd_cell_rl.patch_training import (
     patch_assignments_for_core_cells,
 )
 from hd_cell_rl.ppo_checkpoint import build_actor_critic_from_config, load_checkpoint_payload
+from hd_cell_rl.patch_assignment import PatchOwnershipMerger
 from hd_cell_rl.ppo_config import load_ppo_training_config
 from preprocessing.ppo_format_assignment_eval import (
     add_ppo_format_assignment_eval_args,
@@ -49,7 +51,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--base-config", default=None)
     parser.add_argument("--patches-index-path", default=None)
-    parser.add_argument("--output-dir", default="workspace_outputs/pseudo_human_colorectal/patch_eval")
+    parser.add_argument("--output-dir", default="workspace_outputs/colorectal_nucleus_based/patch_eval")
     parser.add_argument("--max-target-cells", type=int, default=0)
     parser.add_argument("--eval-mode", choices=("ppo_cells", "random_patches"), default="ppo_cells")
     parser.add_argument("--max-eval-patches", type=int, default=0)
@@ -66,7 +68,7 @@ def _parse_args() -> argparse.Namespace:
     )
     add_ppo_format_assignment_eval_args(
         parser,
-        default_eval_run_name="human_colorectal_patch_eval",
+        default_eval_run_name="colorectal_nucleus_based_patch_eval",
         method_label="patch RL",
     )
     args = parser.parse_args()
@@ -106,6 +108,7 @@ def main() -> None:
         reward_backend=str(patch_cfg.get("patch_training", {}).get("reward_backend", "standard")),
         stcs_reward_config=dict(patch_cfg.get("patch_training", {}).get("stcs_reward", {}) or {}),
         cache_patch_contexts=bool(patch_cfg.get("patch_training", {}).get("cache_patch_contexts", False)),
+        patch_context_cache_size=int(patch_cfg.get("patch_training", {}).get("patch_context_cache_size", 128)),
         competition_margin_enabled=bool(
             patch_cfg.get("patch_training", {}).get("competition_margin_enabled", True)
         ),
@@ -125,6 +128,10 @@ def main() -> None:
     device = _resolve_device(str(args.device))
     rollout_devices = _resolve_rollout_devices(_parse_rollout_devices(args.rollout_devices), fallback=device)
     model = build_actor_critic_from_config(config, device=device)
+    from hd_cell_rl.ppo_checkpoint import checkpoint_contract, validate_checkpoint_contract
+    validate_checkpoint_contract(payload, expected=checkpoint_contract(
+        training_unit="patch", agent_mode=settings.agent_mode,
+        reward_backend=settings.reward_backend, rollout_backend=settings.rollout_backend))
     model.load_state_dict(payload["model_state_dict"])
     model.eval()
 
@@ -166,6 +173,7 @@ def main() -> None:
     dataset = PatchDataset(base_config=config, settings=settings, rng=rng)
     contexts: list[PatchContext] = []
     best_rows_by_cell: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+    ownership_merger = PatchOwnershipMerger()
     merge_records: list[dict[str, Any]] = []
     patch_assignment_rows: list[dict[str, Any]] = []
     try:
@@ -205,15 +213,19 @@ def main() -> None:
                     "patch_score": traj.patch_score,
                 }
             )
-            current = best_rows_by_cell.get(cell_id)
-            if current is None or score > current[0]:
-                best_rows_by_cell[cell_id] = (score, rows)
+        ownership_merger.add_patch(context=ctx, score=float(traj.patch_score),
+            target_cell_ids=[c for c in rows_by_cell if c in target_set],
+            rows=[r for cell, rr in rows_by_cell.items() if cell in target_set for r in rr])
         if idx % 25 == 0 or idx == len(contexts):
             print(f"Evaluated {idx}/{len(contexts)} patches")
 
-    assignment_rows: list[dict[str, Any]] = []
-    for _, rows in best_rows_by_cell.values():
-        assignment_rows.extend(rows)
+    assignment_rows, merge_conflicts = ownership_merger.finalize()
+    best_rows_by_cell = ownership_merger.best_rows_by_cell
+    diagnostic_dir = out_dir / 'subdiagnostic'
+    diagnostic_dir.mkdir(exist_ok=True)
+    pd.DataFrame(merge_conflicts, columns=['barcode', 'candidate_cell_id', 'source_patch_id',
+        'source_patch_score', 'nuclear_owner', 'final_owner', 'rule']).to_csv(diagnostic_dir / 'merge_conflicts.csv', index=False)
+    pd.DataFrame(ownership_merger.patch_choices).to_csv(diagnostic_dir / 'patch_choices.csv', index=False)
     if not assignment_rows:
         raise RuntimeError("patch evaluation produced no assignment rows")
     pd.DataFrame(assignment_rows).to_csv(assignments_csv, index=False)
@@ -230,6 +242,8 @@ def main() -> None:
         "n_target_cells": int(len(target_ids)),
         "n_selected_patches": int(len(selected_rows)),
         "n_merged_cells": int(len(best_rows_by_cell)),
+        "n_merge_conflict_barcodes": len({row["barcode"] for row in merge_conflicts}),
+        "merge_rule": "nuclear_then_patch_score_then_stable_ids",
         "eval_mode": str(args.eval_mode),
         "max_eval_patches": int(args.max_eval_patches),
         "policy_mode": str(args.policy_mode),
@@ -257,6 +271,14 @@ def main() -> None:
         ),
         args=args,
         pipeline_config=pipeline,
+    )
+    (
+        out_dir,
+        assignments_csv,
+        patch_assignments_csv,
+        merge_csv,
+    ) = _package_patch_eval_source(
+        out_dir=out_dir, eval_run=eval_run, args=args, pipeline=pipeline
     )
     patch_debug_manifest = None
     if args.gt_cell_bins_path is not None:
@@ -301,6 +323,63 @@ def main() -> None:
     print(f"Patch PPO-format evaluation: {eval_run}")
     if patch_debug_manifest is not None:
         print(f"Patch debug manifest: {patch_debug_manifest}")
+
+
+def _package_patch_eval_source(
+    *,
+    out_dir: Path,
+    eval_run: Path,
+    args: argparse.Namespace,
+    pipeline: dict[str, Any],
+) -> tuple[Path, Path, Path, Path]:
+    """Move intermediate assignments under the final run and rebase provenance."""
+
+    old_root = out_dir.resolve()
+    source_root = eval_run / "source"
+    source_root.mkdir(parents=False, exist_ok=True)
+    packaged_root = source_root / old_root.name
+    if packaged_root.exists():
+        raise FileExistsError(f"packaged patch-eval source already exists: {packaged_root}")
+    shutil.move(str(old_root), str(packaged_root))
+
+    def rebase(value: Path | str) -> Path:
+        path = Path(str(value)).expanduser().resolve()
+        try:
+            relative = path.relative_to(old_root)
+        except ValueError:
+            return path
+        return packaged_root / relative
+
+    assignments_csv = packaged_root / "patch_rl_assignments.csv"
+    patch_assignments_csv = packaged_root / "patch_rl_patch_assignments.csv"
+    merge_csv = packaged_root / "patch_rl_merge_candidates.csv"
+    pipeline.update(
+        {
+            "assignments_csv": str(assignments_csv),
+            "patch_assignments_csv": str(patch_assignments_csv),
+            "merge_candidates_csv": str(merge_csv),
+        }
+    )
+    if args.ppo_eval_run_dir is not None:
+        args.ppo_eval_run_dir = str(rebase(args.ppo_eval_run_dir))
+
+    old_prefix = str(old_root)
+    new_prefix = str(packaged_root)
+    for provenance_path in (eval_run / "summary.json", eval_run / "config_used.yaml"):
+        if not provenance_path.exists():
+            continue
+        content = provenance_path.read_text(encoding="utf-8")
+        provenance_path.write_text(
+            content.replace(old_prefix, new_prefix),
+            encoding="utf-8",
+        )
+
+    with (packaged_root / "patch_eval_pipeline_summary.json").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        json.dump(pipeline, handle, indent=2)
+        handle.write("\n")
+    return packaged_root, assignments_csv, patch_assignments_csv, merge_csv
 
 
 def _resolve_device(device_name: str) -> torch.device:
@@ -433,6 +512,11 @@ def _patch_debug_trajectory_metadata(
                 "done": bool(step.done),
                 "n_local_actions": int(step.n_local_actions),
                 "n_noop_actions": int(step.n_noop_actions),
+                "objective_delta_components": step.objective_delta_components,
+                "available_action_count": step.available_action_count,
+                "chosen_action_reward": step.chosen_action_reward,
+                "best_available_action_reward": step.best_available_action_reward,
+                "chosen_action_reward_rank": step.chosen_action_reward_rank,
                 "actions": actions,
             }
         )
@@ -481,8 +565,10 @@ def _trace_bin_geometry(
     *,
     context: PatchContext,
     barcodes: set[str],
-) -> dict[str, dict[str, float | int]]:
-    geometry: dict[str, dict[str, float | int]] = {}
+) -> dict[str, dict[str, float | int | str | bool]]:
+    geometry: dict[str, dict[str, float | int | str | bool]] = {}
+    em_result = context.em_assignment
+    em_index = {} if em_result is None else em_result.barcode_to_index()
     for cell in context.cells:
         xy = np.asarray(cell.candidate_bin_xy_um, dtype=np.float64)
         for bin_idx, barcode_value in enumerate(cell.candidate_bin_ids):
@@ -490,7 +576,7 @@ def _trace_bin_geometry(
             if barcode not in barcodes or barcode in geometry:
                 continue
             row_col = _parse_square_barcode(barcode)
-            geometry[barcode] = {
+            row: dict[str, float | int | str | bool] = {
                 "array_row": (
                     int(row_col[0]) if row_col is not None else int(round(float(xy[bin_idx, 1]) / 2.0))
                 ),
@@ -500,6 +586,34 @@ def _trace_bin_geometry(
                 "x_um": float(xy[bin_idx, 0]),
                 "y_um": float(xy[bin_idx, 1]),
             }
+            em_bin_idx = em_index.get(barcode)
+            if em_result is not None and em_bin_idx is not None:
+                row.update(
+                    {
+                        "em_top1_cell_id": str(
+                            em_result.cell_ids[
+                                int(em_result.top1_cell_index[int(em_bin_idx)])
+                            ]
+                        ),
+                        "em_top1_probability": float(
+                            em_result.top1_probability[int(em_bin_idx)]
+                        ),
+                        "em_top2_probability": float(
+                            em_result.top2_probability[int(em_bin_idx)]
+                        ),
+                        "em_margin": float(em_result.margin[int(em_bin_idx)]),
+                        "em_normalized_entropy": float(
+                            em_result.normalized_entropy[int(em_bin_idx)]
+                        ),
+                        "em_is_ambiguous": bool(
+                            em_result.is_ambiguous[int(em_bin_idx)]
+                        ),
+                        "em_is_nuclear_locked": bool(
+                            em_result.is_nuclear_locked[int(em_bin_idx)]
+                        ),
+                    }
+                )
+            geometry[barcode] = row
     return geometry
 
 

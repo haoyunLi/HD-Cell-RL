@@ -18,12 +18,11 @@ echo "Activating conda environment..."
 source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate "$WORK_DIR/Bin2Cell_Validation"
 
-mkdir -p workspace_outputs/pseudo_human_colorectal/intermediate
+mkdir -p workspace_outputs/colorectal_nucleus_based/intermediate/nuclei
 
-python preprocessing/build_nuclei_table_from_pixel_segmentation.py \
-  --pixel-mapping-csv workspace_outputs/pseudo_human_colorectal/intermediate/cellpose_sam_human_colorectal_output/cropped_visium_hd_human_Colorectal_pixel_to_cell_mapping_full.csv.gz \
-  --tissue-positions-parquet colorectal_pseudo_visium_hd_output_full_0.25/spatial/tissue_positions.parquet \
-  --output-path workspace_outputs/pseudo_human_colorectal/intermediate/human_colorectal_nuclei.parquet \
-  --summary-path workspace_outputs/pseudo_human_colorectal/intermediate/human_colorectal_nuclei.summary.json \
-  --microns-per-pixel 0.2737012522439323 \
-  --chunk-size 1000000
+python preprocessing/build_nuclei_table_from_nuclear_bins.py \
+  --nuclear-bins-path workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz \
+  --output-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.parquet \
+  --summary-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.summary.json \
+  --bin-size-um 2.0 \
+  --microns-per-pixel 0.2737012522439323

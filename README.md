@@ -13,13 +13,22 @@ Repository roles and placement rules are documented in [`docs/PROJECT_STRUCTURE.
 
 The public `gh-pages` snapshot keeps the latest patch debugger at the site root and the Reveal presentation under `/progress-report/`. Source code remains on `main`; each successful publication replaces the previous generated snapshot instead of accumulating run artifacts in Git history.
 
-Current main training path:
-- Build episodes once.
-- Train with `jobs/training/run_ppo_training_full_grpo_cpu.sbatch`.
-- Evaluate checkpoints with `jobs/evaluation/run_evaluate_ppo_checkpoint.sbatch`.
-- Compare Bin2Cell, SMURF, and STCS using the same PPO-evaluation cell set and the same PPO-aligned nuclear seeds.
+## Supported execution paths
 
-Current ADD reward expression mixture:
+The current patch workflow is episode construction → optional EM initialization → discrete patch RL → patch checkpoint evaluation. Single-cell PPO/GRPO remains available as a legacy comparison, not the main patch path.
+
+- EM-only experiments: `scripts/run_em_weight_sweep.py` (no policy training).
+- Patch training: `scripts/run_patch_training.py --config <patch-config.yaml>`.
+- Patch evaluation: `scripts/evaluate_patch_checkpoint.py --help`.
+- Legacy single-cell training/evaluation: the full-GRPO and single-cell PPO jobs below.
+
+On an allocated HPC node these Python entry points can run directly; Slurm wrappers are optional. For CPU patch runs set `run.device: cpu`, `run.rollout_devices: [cpu]` and `patch_training.rollout_backend: torch_gpu` in a separate config. The last value is the existing backend name; it also accepts CPU devices. Do not change a previous run's saved config.
+
+Use `requirements-core.txt` for the EM/patch runtime; the full `requirements.txt` also installs segmentation and annotation tools. See [engineering safeguards and verification](docs/ENGINEERING_SAFETY.md) for checkpoint compatibility, cache behavior and CPU test commands. No new training or public deployment is triggered by these safeguards. GitHub Pages publication now requires an explicit opt-in.
+
+See [the September 9 project corrections](docs/PROJECT_REMEDIATION_20260909.md) for the named frozen EM baseline, deterministic cross-patch exports, patch-cluster confidence intervals, source-separated pseudo-data controls and opt-in validation checkpoint selection. New pseudo controls remain experimental until multiscale acceptance passes; do not replace old datasets or start formal PPO from a failed audit.
+
+Legacy single-cell ADD reward expression mixture (not the patch global objective):
 ```text
 ADD reward =
   w1 * zscore(new posterior-confidence gain over frontier)
@@ -37,7 +46,7 @@ The output image is the input for segmentation.
 sbatch jobs/preprocessing/run_crop_visium_hd.sbatch
 ```
 Expected output:
-- `workspace_outputs/human_colorectal/intermediate/cropped_visium_hd_human_Colorectal.png`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png`
 
 ## 2) Run Cellpose nuclear segmentation
 This step runs nucleus segmentation on the cropped image and writes cell/nucleus masks and related artifacts.
@@ -46,7 +55,7 @@ These segmentation results are later mapped to official 2um bins.
 sbatch jobs/preprocessing/run_cellpose_sam.sbatch
 ```
 Expected output folder:
-- `workspace_outputs/human_colorectal/intermediate/cellpose_sam_human_colorectal_output/`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/cellpose_sam_colorectal_nucleus_based_output/`
 
 ## 3) Map pixel nuclear signal to official `square_002um` bins
 This step converts pixel-level nuclear assignments into official Visium HD `square_002um` bin coordinates.
@@ -55,9 +64,22 @@ It also writes an overlay for quick visual QC.
 sbatch jobs/preprocessing/run_pixel_to_square_002um_bins.sbatch
 ```
 Expected outputs:
-- `workspace_outputs/human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins.csv.gz`
-- `workspace_outputs/human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins.summary.json`
-- `workspace_outputs/human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins_overlay.png`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.summary.json`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins_overlay.png`
+
+### Export nucleus-based ground truth bins
+
+The current pseudo-HD dataset stores exact cell and compartment assignments in a parquet table. Export it once into the CSV schema used by shape-reference construction and evaluation:
+
+```bash
+sbatch jobs/preprocessing/run_pseudo_pixel_to_square_002um_bins.sbatch
+```
+
+Expected outputs:
+- `workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_gt_bins.summary.json`
 
 ## 4) Merge filtered expression metadata + nuclear annotation
 This step merges official HD filtered-bin metadata/expression indexing with nuclear-bin annotation into one RL-ready table.
@@ -67,62 +89,47 @@ The merged table is the main structural input for episode construction.
 sbatch jobs/preprocessing/run_merge_square_002um_expression_with_nuclear.sbatch
 ```
 Expected outputs:
-- `workspace_outputs/human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.metadata.parquet`
-- `workspace_outputs/human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.selected_features.tsv.gz`
-- `workspace_outputs/human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.selected_feature_indices.npy`
-- `workspace_outputs/human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.manifest.json`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.metadata.parquet`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.selected_features.tsv.gz`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.selected_feature_indices.npy`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.manifest.json`
 
 ## 5) Build nuclei table (one row per nucleus)
-This step builds one nucleus-center record per cell (`center_x_um`, `center_y_um`) from segmentation outputs.
-These centers are used by reward distance and overlap terms.
+
+For `colorectal_nucleus_based`, build nucleus centers directly from the
+fractional nuclear ground-truth bins. The center is weighted by
+`nuclear_fraction`, and the radius is derived from covered nuclear area.
+
 ```bash
-sbatch jobs/preprocessing/run_build_nuclei_table.sbatch
+python preprocessing/build_nuclei_table_from_nuclear_bins.py \
+  --nuclear-bins-path workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz \
+  --output-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.parquet \
+  --summary-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.summary.json
 ```
 Expected outputs:
-- `workspace_outputs/human_colorectal/intermediate/human_colorectal_nuclei.parquet`
-- `workspace_outputs/human_colorectal/intermediate/human_colorectal_nuclei.summary.json`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.parquet`
+- `workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.summary.json`
 
-## 6) Build aligned scRNA reference counts (`C[k,g]`)
-This step builds reference counts by cell type on the HD-overlap gene set, which drives posterior-based expression reward.
-It also writes the selected HD gene allowlist used for alignment.
-```bash
-sbatch jobs/preprocessing/run_build_reference_counts_sct.sbatch
-```
-Expected outputs:
-- `workspace_outputs/human_colorectal/intermediate/reference_sct/hd_selected_feature_names_unique.txt`
-- `workspace_outputs/human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz`
-- `workspace_outputs/human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.summary.json`
+## 6) Reuse the independent scRNA expression reference
 
-## 7) Build GT shape reference features
-This step builds per-cell GT shape features from pseudo whole-cell square_002um bins. It keeps `cell_type` labels from `ground_truth_cell_assignments.csv` and writes both raw and z-scored features.
+Do not build the expression reference from the current pseudo-HD target. The
+episode and PPO configs use the existing colorectal scRNA reference:
 
-Run:
-```bash
-sbatch jobs/preprocessing/run_build_reference_shape_features_gt.sbatch
-```
+`workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz`
 
-Expected outputs:
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/human_colorectal_gt_shape_reference.per_cell.csv.gz`
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/human_colorectal_gt_shape_reference.cell_type_summary.csv`
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/human_colorectal_gt_shape_reference.npz`
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/human_colorectal_gt_shape_reference.summary.json`
+It contains 38 cell types and 15,143 HD-overlap genes. This reference supplies
+`theta[k,g]` and therefore `LL[b,k]` for both RL and generalized EM.
 
-Features:
-- `log_area = log(area + 1)` where area is the number of unique assigned 2 um bins.
-- `compactness = 4 * pi * area / perimeter^2`, using exposed 4-neighbor grid edges for perimeter.
-- `solidity = area / convex_hull_area`, with small or failed hulls set to 1.0.
-- `anisotropy = lambda1 / lambda2` from the coordinate covariance eigenvalues.
+## 7) Reuse the existing shape prior
 
-Build morphology clusters and the Gaussian shape-prior model:
-```bash
-sbatch jobs/preprocessing/run_plot_shape_reference_tsne.sbatch
-sbatch jobs/preprocessing/run_build_shape_prior_model.sbatch
-```
+Do not fit the shape model from the current target assignments. The PPO configs
+reuse:
 
-The cluster step writes `shape_cluster` labels from unsupervised shape features, not biological `cell_type`. The model step fits one Gaussian per shape cluster and writes:
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.clustered_reference.csv.gz`
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.npz`
-- `workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.summary.json`
+`workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.npz`
+
+Shape is a morphology reference rather than an scRNA count matrix. Keeping this
+model fixed prevents the current target's whole-cell ground truth from entering
+inference.
 
 ## 8) Build episodes
 This step creates per-cell episode artifacts with candidate bins, geometry, and matrix references used by reward computation.
@@ -153,13 +160,13 @@ sbatch jobs/training/run_ppo_training_full_grpo_cpu.sbatch
 
 Run with a specific episode build:
 ```bash
-EP_RUN="runs/human_colorectal_episode_build_YYYYMMDDTHHMMSSZ"
+EP_RUN="runs/colorectal_nucleus_based_episode_build_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,EPISODE_RUN_DIR="$EP_RUN" jobs/training/run_ppo_training_full_grpo_cpu.sbatch
 ```
 
 Useful overrides:
 ```bash
-sbatch --export=ALL,EPISODE_RUN_DIR="$EP_RUN",BATCH_CELLS=200,MAX_UPDATES=600,RUN_NAME=human_colorectal_full_grpo jobs/training/run_ppo_training_full_grpo_cpu.sbatch
+sbatch --export=ALL,EPISODE_RUN_DIR="$EP_RUN",BATCH_CELLS=200,MAX_UPDATES=600,RUN_NAME=colorectal_nucleus_based_full_grpo jobs/training/run_ppo_training_full_grpo_cpu.sbatch
 ```
 
 Alternative training configs:
@@ -168,17 +175,17 @@ Alternative training configs:
 - `configs/ppo_training.full_grpo.yaml`: current full-GRPO training path.
 
 Expected outputs:
-- `runs/human_colorectal_full_grpo_*/checkpoints/best_model.pt`
-- `runs/human_colorectal_full_grpo_*/checkpoints/final_model.pt`
-- `runs/human_colorectal_full_grpo_*/summary.json`
-- `runs/human_colorectal_full_grpo_*/logs/steps.jsonl`
+- `runs/colorectal_nucleus_based_full_grpo_*/checkpoints/best_model.pt`
+- `runs/colorectal_nucleus_based_full_grpo_*/checkpoints/final_model.pt`
+- `runs/colorectal_nucleus_based_full_grpo_*/summary.json`
+- `runs/colorectal_nucleus_based_full_grpo_*/logs/steps.jsonl`
 
 ## 10) Evaluate PPO / GRPO checkpoint
 This evaluates a trained policy on the episode set, writes per-cell metrics, overlays, IoU distribution plots, and optional gene-correlation metrics against pseudo GT single-cell expression.
 
 Run:
 ```bash
-CHECKPOINT_PATH="runs/human_colorectal_full_grpo_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt"
+CHECKPOINT_PATH="runs/colorectal_nucleus_based_full_grpo_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt"
 sbatch --export=ALL,CHECKPOINT_PATH="$CHECKPOINT_PATH" jobs/evaluation/run_evaluate_ppo_checkpoint.sbatch
 ```
 
@@ -196,9 +203,9 @@ jobs/evaluation/run_evaluate_ppo_checkpoint.sbatch
 ```
 
 Expected outputs:
-- `runs/human_colorectal_ppo_eval_*/summary.json`
-- `runs/human_colorectal_ppo_eval_*/per_episode.csv`
-- `runs/human_colorectal_ppo_eval_*/overlays/`
+- `runs/colorectal_nucleus_based_ppo_eval_*/summary.json`
+- `runs/colorectal_nucleus_based_ppo_eval_*/per_episode.csv`
+- `runs/colorectal_nucleus_based_ppo_eval_*/overlays/`
 - IoU distribution/CDF plots in the evaluation run directory.
 
 Notes:
@@ -210,7 +217,7 @@ The default React + TypeScript view shows one complete evaluated patch: predicte
 
 Run on a compute node:
 ```bash
-PATCH_EVAL_RUN_DIR="runs/human_colorectal_patch_overfit4_eval_YYYYMMDDTHHMMSSZ"
+PATCH_EVAL_RUN_DIR="runs/colorectal_nucleus_based_patch_overfit4_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PATCH_EVAL_RUN_DIR",DEBUG_UI=patch jobs/apps/run_ppo_debug_app.sbatch
 ```
 
@@ -218,7 +225,7 @@ If an older patch evaluation does not yet contain `patch_debug/manifest.json`, t
 
 The previous per-cell step replay remains available:
 ```bash
-PPO_EVAL_RUN_DIR="runs/human_colorectal_ppo_eval_YYYYMMDDTHHMMSSZ"
+PPO_EVAL_RUN_DIR="runs/colorectal_nucleus_based_ppo_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR",DEBUG_UI=streamlit,RUN_DEVICE=cpu jobs/apps/run_ppo_debug_app.sbatch
 ```
 
@@ -226,7 +233,7 @@ The job prints a LAN URL and an SSH tunnel command. If direct LAN access is bloc
 
 ### Publish the latest patch evaluation to GitHub Pages
 
-`main` keeps only source code. Generated frontend files and `runs/` remain ignored. The publisher builds the React app, copies one completed evaluation's `patch_debug/`, creates a fresh root commit in a temporary repository, and force-pushes only that snapshot to `gh-pages`. The reachable `gh-pages` history therefore contains one commit and one evaluation.
+`main` keeps only source code. Generated frontend files and `runs/` remain ignored. The publisher builds the React app, copies one completed evaluation's `patch_debug/`, adds the static progress report under `/progress-report/`, creates a fresh root commit in a temporary repository, and force-pushes that snapshot to `gh-pages`. The reachable `gh-pages` history therefore contains one commit and one evaluation.
 
 The overfit patch evaluation job publishes its exact output after a successful run by default:
 
@@ -238,11 +245,11 @@ Disable publication for a private or provisional run with `PUBLISH_GITHUB_PAGES=
 
 ```bash
 python scripts/publish_patch_debug_pages.py \
-  --eval-run-dir runs/human_colorectal_patch_overfit4_eval_YYYYMMDDTHHMMSSZ \
+  --eval-run-dir runs/colorectal_nucleus_based_patch_overfit4_eval_YYYYMMDDTHHMMSSZ \
   --push
 ```
 
-Before the first publication, configure the repository's Pages source as `gh-pages` at `/ (root)` and make sure the batch environment can authenticate `git push` to `origin`. The deployed project URL is `https://haoyunli.github.io/HD-Cell-RL/`.
+Before the first publication, configure the repository's Pages source as `gh-pages` at `/ (root)` and make sure the environment can authenticate `git push` to `origin`. The patch debugger is available at `https://haoyunli.github.io/HD-Cell-RL/`; the presentation is available at `https://haoyunli.github.io/HD-Cell-RL/progress-report/`.
 
 ## 12) Run Bin2Cell / SMURF / STCS baselines with PPO-aligned nuclei
 These method jobs are configured to use the same PPO-aligned nuclear bins instead of each tool's independent nuclear segmentation whenever possible. This keeps method comparison on the same nuclear seed level.
@@ -251,7 +258,7 @@ All three method jobs can evaluate against the same PPO checkpoint-evaluation ce
 
 ### Bin2Cell
 ```bash
-PPO_EVAL_RUN_DIR="runs/human_colorectal_ppo_eval_YYYYMMDDTHHMMSSZ"
+PPO_EVAL_RUN_DIR="runs/colorectal_nucleus_based_ppo_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR" jobs/baselines/run_bin2cell.sbatch
 ```
 
@@ -261,13 +268,13 @@ Key behavior:
 - Still runs Bin2Cell expansion/GEX/combine steps.
 
 Main outputs:
-- `workspace_outputs/pseudo_human_colorectal/bin2cell_results_colorectal_0.25/human_colorectal_bin2cell_assignments.csv`
-- `runs/human_colorectal_bin2cell_eval_*/summary.json`
-- `runs/human_colorectal_bin2cell_eval_*/overlays/`
+- `workspace_outputs/colorectal_nucleus_based/bin2cell_results/colorectal_nucleus_based_bin2cell_assignments.csv`
+- `runs/colorectal_nucleus_based_bin2cell_eval_*/summary.json`
+- `runs/colorectal_nucleus_based_bin2cell_eval_*/overlays/`
 
 ### SMURF
 ```bash
-PPO_EVAL_RUN_DIR="runs/human_colorectal_ppo_eval_YYYYMMDDTHHMMSSZ"
+PPO_EVAL_RUN_DIR="runs/colorectal_nucleus_based_ppo_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR" jobs/baselines/run_smurf.sbatch
 ```
 
@@ -276,9 +283,9 @@ Key behavior:
 - Writes PPO-format assignment outputs and evaluation summaries.
 
 Main outputs:
-- `workspace_outputs/pseudo_human_colorectal/smurf_results_colorectal_0.25/human_colorectal_smurf_assignments.csv`
-- `runs/human_colorectal_smurf_eval_*/summary.json`
-- `runs/human_colorectal_smurf_eval_*/overlays/`
+- `workspace_outputs/colorectal_nucleus_based/smurf_results/colorectal_nucleus_based_smurf_assignments.csv`
+- `runs/colorectal_nucleus_based_smurf_eval_*/summary.json`
+- `runs/colorectal_nucleus_based_smurf_eval_*/overlays/`
 
 ### STCS
 Set up the STCS environment once:
@@ -288,7 +295,7 @@ sbatch jobs/baselines/setup_stcs_env.sbatch
 
 Then run STCS:
 ```bash
-PPO_EVAL_RUN_DIR="runs/human_colorectal_ppo_eval_YYYYMMDDTHHMMSSZ"
+PPO_EVAL_RUN_DIR="runs/colorectal_nucleus_based_ppo_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR" jobs/baselines/run_stcs.sbatch
 ```
 
@@ -297,16 +304,16 @@ Key behavior:
 - By default uses `RESTRICT_TO_EVAL_CELLS=true` and `EVAL_CONTEXT_RADIUS_BINS=10` to reduce memory while preserving nearby competitor nuclei.
 
 Main outputs:
-- `workspace_outputs/pseudo_human_colorectal/stcs_results_colorectal_0.25/human_colorectal_stcs_assignments.csv`
-- `runs/human_colorectal_stcs_eval_*/summary.json`
-- `runs/human_colorectal_stcs_eval_*/overlays/`
+- `workspace_outputs/colorectal_nucleus_based/stcs_results/colorectal_nucleus_based_stcs_assignments.csv`
+- `runs/colorectal_nucleus_based_stcs_eval_*/summary.json`
+- `runs/colorectal_nucleus_based_stcs_eval_*/overlays/`
 
 ## 13) Re-run method evaluation only
 If Bin2Cell, SMURF, or STCS assignments already exist, use this job to re-run only PPO-format evaluation without re-running the full method pipeline.
 
 Run all available methods:
 ```bash
-PPO_EVAL_RUN_DIR="runs/human_colorectal_ppo_eval_YYYYMMDDTHHMMSSZ"
+PPO_EVAL_RUN_DIR="runs/colorectal_nucleus_based_ppo_eval_YYYYMMDDTHHMMSSZ"
 sbatch --export=ALL,PPO_EVAL_RUN_DIR="$PPO_EVAL_RUN_DIR" jobs/evaluation/run_method_ppo_eval_only.sbatch
 ```
 

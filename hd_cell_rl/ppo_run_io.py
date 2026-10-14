@@ -17,6 +17,8 @@ import yaml
 
 from .ppo_config import PPOTrainingConfig
 from .ppo_model import ActorCritic
+from .ppo_checkpoint import atomic_save_checkpoint, checkpoint_contract
+from .provenance import source_provenance
 
 _LOCAL_TIMEZONE = ZoneInfo("America/Chicago")
 _LOCAL_TIMEZONE_NAME = "America/Chicago"
@@ -30,15 +32,20 @@ def _save_checkpoint(
     update_index: int,
     best_moving_avg_reward: float | None,
     config: PPOTrainingConfig,
+    model_state: dict | None = None,
+    optimizer_state: dict | None = None,
+    selection_basis: str = "final_post_update",
 ) -> None:
     payload = {
         "update_index": int(update_index),
         "best_moving_avg_reward": best_moving_avg_reward,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dict": model.state_dict() if model_state is None else model_state,
+        "optimizer_state_dict": optimizer.state_dict() if optimizer_state is None else optimizer_state,
+        "selection_basis": selection_basis,
         "config": config.to_serializable_dict(),
+        "feature_contract": checkpoint_contract(),
     }
-    torch.save(payload, path)
+    atomic_save_checkpoint(payload, path)
 
 
 def _build_metadata(run_dir: Path, seed: int | None) -> dict[str, Any]:
@@ -52,6 +59,7 @@ def _build_metadata(run_dir: Path, seed: int | None) -> dict[str, Any]:
         "platform": platform.platform(),
         "seed": seed,
         "git_commit": _git_commit_hash(),
+        "provenance": source_provenance(),
     }
 
 

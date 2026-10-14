@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 import json
@@ -40,14 +41,25 @@ class PatchDataset:
             raise ValueError(f"patches index is empty: {settings.patches_index_path}")
         self._cell_dataset = EpisodeDataset(config=base_config, rng=rng)
         self._artifact_by_cell = _load_episode_artifact_map(base_config.episodes_index_path)
-        self._context_cache: dict[str, PatchContext | None] = {}
+        if settings.patch_context_cache_size < 0:
+            raise ValueError("patch_context_cache_size must be >= 0")
+        self._context_cache: OrderedDict[str, PatchContext | None] = OrderedDict()
 
     @property
     def n_patches(self) -> int:
         return int(len(self._patches_df))
 
     def close(self) -> None:
+        self._context_cache.clear()
         self._cell_dataset.close()
+
+    def _cache_context(self, patch_id: str, context: PatchContext | None) -> None:
+        if not self._settings.cache_patch_contexts or self._settings.patch_context_cache_size == 0:
+            return
+        self._context_cache[patch_id] = context
+        self._context_cache.move_to_end(patch_id)
+        while len(self._context_cache) > self._settings.patch_context_cache_size:
+            self._context_cache.popitem(last=False)
 
     @property
     def reference_theta(self) -> np.ndarray:
@@ -135,6 +147,7 @@ class PatchDataset:
     def load_patch_context(self, row: Any) -> PatchContext | None:
         patch_id = str(getattr(row, "patch_id"))
         if self._settings.cache_patch_contexts and patch_id in self._context_cache:
+            self._context_cache.move_to_end(patch_id)
             return self._context_cache[patch_id]
 
         outer_bounds = PatchBounds(
@@ -210,7 +223,7 @@ class PatchDataset:
         loaded_core = tuple(cell_id for cell_id in core_cell_ids if cell_id in loaded_cell_ids)
         if not cells or not loaded_core:
             if self._settings.cache_patch_contexts:
-                self._context_cache[patch_id] = None
+                self._cache_context(patch_id, None)
             return None
 
         reward_backend = str(getattr(self._settings, "reward_backend", "standard")).strip().lower()
@@ -225,6 +238,8 @@ class PatchDataset:
 
         force_fill_enabled = bool(getattr(self._settings, "force_fill_expression_bins", False))
         score_normalization = str(self._settings.score_normalization)
+        if score_normalization.endswith("_patch_cells") and not str(getattr(self._settings, "agent_mode", "multi_cell")).endswith("global_delta"):
+            raise ValueError("*_patch_cells normalization is only supported in global-delta modes")
         should_build_expression_target = force_fill_enabled or score_normalization in {
             "mean_expression_bins",
             "sqrt_expression_bins",
@@ -292,7 +307,7 @@ class PatchDataset:
                 reference_theta=reference_theta,
             )
         if self._settings.cache_patch_contexts:
-            self._context_cache[patch_id] = context
+            self._cache_context(patch_id, context)
         return context
 
     def _resolve_candidate_max_distance(self, row: Any) -> float:

@@ -1,0 +1,121 @@
+run:
+  name: colorectal_nucleus_based_multi_owner_v2_patch_overfit4_w5_validated
+  output_root: /projects/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/runs
+  seed: 7
+  device: cuda
+  batch_cells: 200
+  rollout_mode: vectorized
+  n_rollout_workers: 32
+  max_updates: 500
+  max_steps_per_episode: null
+  training_mode: full_grpo
+inputs:
+  episodes_index_path: /projects/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/runs/colorectal_nucleus_based_multi_owner_v2_episode_build_20260826T205559Z/episodes_index.csv
+  reference:
+    path: /projects/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz
+    format: npz
+    array_key: reference_counts
+    genes_key: genes
+  nuclei:
+    path: /projects/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/workspace_outputs/colorectal_nucleus_based_multi_owner_v2/intermediate/nuclei/colorectal_nucleus_based_multi_owner_v2_nuclei.parquet
+    format: parquet
+    columns:
+      cell_id: cell_id
+      center_x_um: center_x_um
+      center_y_um: center_y_um
+  expression_cache_size: null
+  episode_context_cache_size: 512
+ppo:
+  gamma: 0.99
+  gae_lambda: 0.95
+  normalize_returns_per_episode: false
+  normalize_advantages: false
+  eps_clip: 0.2
+  ppo_epochs: 4
+  minibatch_size: 512
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  vf_coef: 0.0
+  ent_coef: 0.008
+  max_grad_norm: 1.0
+  hidden_dim: 128
+  target_kl: 0.01
+group_relative:
+  enabled: true
+  group_size: 4
+  mix_alpha: 1.0
+  norm_epsilon: 1.0e-06
+  score: episode_total_reward
+planner:
+  enabled: false
+  interval: 4
+  modes:
+  - stop
+  - compact
+  - balanced
+  - explore
+  cot_weight: 0.4
+  entropy_coef: 0.02
+  logit_bias:
+    compact:
+      neighbor_support: 0.8
+      compactness_gain: 0.5
+      centroid_distance: -0.3
+      expression: 0.2
+    balanced:
+      neighbor_support: 0.2
+      compactness_gain: 0.1
+      centroid_distance: -0.1
+      expression: 0.2
+    explore:
+      neighbor_support: 0.0
+      compactness_gain: 0.0
+      centroid_distance: -0.1
+      expression: 0.5
+    stop:
+      neighbor_support: 0.0
+      compactness_gain: 0.0
+      centroid_distance: 0.0
+      expression: 0.0
+full_grpo:
+  reward_weight: 1.0
+  evidence_growth_weight: 0.7
+  stop_weight: 0.5
+  overgrowth_weight: 0.8
+  compact_weight: 0.25
+  compact_streak_weight: 0.25
+  explore_weight: 0.4
+  tau_frontier: 0.0
+  frontier_temp: 0.2
+  shape_cot_weight: 0.25
+reward:
+  epsilon: 1.0e-08
+  r_max_um: 20.0
+  w1: 0.0
+  w2: 0.55
+  w3: 0.0
+  w4: 0.035
+  w5: 0.15
+  stop_lambda: 0.05
+  stop_stat: topk_mean
+  stop_top_k: 5
+  expression_confidence_pseudocount: 5.0
+  normalize_expression_zscore: true
+  zscore_delta: 1.0e-08
+  competition_margin_weight: 0.1
+  competition_margin_radius_um: 20.0
+  competition_margin_clip: 5.0
+  competition_margin_affects_stop: false
+shape_prior:
+  enabled: true
+  model_path: /projects/illinois/vetmed/cb/kwang222/Haoyun_Li/HD-Cell-RL/workspace_outputs/pseudo_human_colorectal/intermediate/reference_shape/tsne/human_colorectal_gt_shape_reference.shape_prior_model.npz
+  weight: 0.006259260981369026
+  mode: mixture
+  reward_mode: delta
+  normalize_over_frontier: true
+  clip: 5.0
+  bin_size_um: 2.0
+stopping:
+  moving_avg_window: 10
+  min_improvement: 0.001
+  patience: 5

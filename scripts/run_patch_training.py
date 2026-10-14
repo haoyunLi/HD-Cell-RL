@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
 import datetime as dt
@@ -31,8 +32,11 @@ from hd_cell_rl.patch_training import (
     collect_patch_trajectories_batched,
     patch_ppo_update,
 )
-from hd_cell_rl.ppo_checkpoint import build_actor_critic_from_config, load_checkpoint_payload
+from hd_cell_rl.ppo_checkpoint import (build_actor_critic_from_config, load_checkpoint_payload,
+    atomic_save_checkpoint, checkpoint_contract, validate_checkpoint_contract)
 from hd_cell_rl.ppo_config import load_ppo_training_config
+from hd_cell_rl.provenance import file_fingerprint
+from hd_cell_rl.patch_validation import PatchValidationEvaluator, require_training_admission
 from hd_cell_rl.ppo_run_io import _append_step_log, _build_metadata, _slugify, _write_json, _write_yaml
 
 
@@ -51,7 +55,7 @@ def main() -> None:
 
     run_cfg = dict(patch_cfg.get("run", {}))
     patch_training = dict(patch_cfg.get("patch_training", {}))
-    run_name = str(run_cfg.get("name", "human_colorectal_patch_full_grpo"))
+    run_name = str(run_cfg.get("name", "colorectal_nucleus_based_patch_full_grpo"))
     output_root = Path(str(run_cfg.get("output_root", base_config.output_root))).expanduser().resolve()
     seed = int(run_cfg.get("seed", base_config.seed if base_config.seed is not None else 7))
     device_name = str(run_cfg.get("device", base_config.device)).lower()
@@ -78,7 +82,6 @@ def main() -> None:
         raise ValueError("patch_training.global_delta_epsilon must be >= 0")
     if agent_mode in {"single_cell_global_delta", "multi_cell_global_delta", "multi_cell_joint_global_delta"} and rollout_backend != "torch_gpu":
         raise ValueError(f"patch_training.agent_mode={agent_mode!r} requires rollout_backend='torch_gpu'")
-    warm_start_raw = run_cfg.get("warm_start_checkpoint", "")
     em_assignment = EMAssignmentConfig.from_mapping(patch_cfg.get("em_assignment", {}))
     if em_assignment.enabled:
         if agent_mode not in {
@@ -95,6 +98,7 @@ def main() -> None:
             raise ValueError("generalized EM v1 supports patch_training.reward_backend='standard' only")
         if not bool(patch_training.get("margin_cells_compete", True)):
             raise ValueError("em_assignment.enabled requires patch_training.margin_cells_compete=true")
+    warm_start_raw = run_cfg.get("warm_start_checkpoint", "")
     warm_start_checkpoint = None if warm_start_raw in (None, "") else Path(str(warm_start_raw)).expanduser().resolve()
 
     # Patch v1 uses the low-level ADD/STOP policy only. Keeping planner disabled
@@ -120,6 +124,7 @@ def main() -> None:
         reward_backend=reward_backend,
         stcs_reward_config=stcs_reward_config,
         cache_patch_contexts=bool(patch_training.get("cache_patch_contexts", False)),
+        patch_context_cache_size=int(patch_training.get("patch_context_cache_size", 128)),
         competition_margin_enabled=bool(patch_training.get("competition_margin_enabled", True)),
         force_fill_expression_bins=bool(patch_training.get("force_fill_expression_bins", False)),
         fill_target=fill_target,
@@ -130,6 +135,10 @@ def main() -> None:
         em_assignment=em_assignment,
     )
 
+    validation_cfg = dict(patch_cfg.get('validation', {}))
+    require_training_admission(config, settings, run_cfg, validation_cfg)
+    validation_evaluator = (PatchValidationEvaluator(config=config, settings=settings, validation=validation_cfg)
+                            if validation_cfg.get('enabled', False) else None)
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{_slugify(run_name)}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir.mkdir(parents=False, exist_ok=False)
@@ -175,6 +184,7 @@ def main() -> None:
             "reward_backend": settings.reward_backend,
             "stcs_reward": settings.stcs_reward_config or {},
             "cache_patch_contexts": settings.cache_patch_contexts,
+            "patch_context_cache_size": settings.patch_context_cache_size,
             "competition_margin_enabled": settings.competition_margin_enabled,
             "force_fill_expression_bins": settings.force_fill_expression_bins,
             "fill_target": settings.fill_target,
@@ -184,12 +194,25 @@ def main() -> None:
             "global_delta_epsilon": settings.global_delta_epsilon,
         }
     )
-    _write_yaml(base_config_used_path, config.to_serializable_dict())
     patch_config_used["em_assignment"] = _serialize_em_assignment_config(
         settings.em_assignment
     )
+    _write_yaml(base_config_used_path, config.to_serializable_dict())
     _write_yaml(run_dir / "patch_config_used.yaml", patch_config_used)
-    _write_json(run_dir / "metadata.json", _build_metadata(run_dir, seed))
+    metadata = _build_metadata(run_dir, seed)
+    input_paths = {"base_config": base_config_path, "patch_config": Path(args.config),
+                   "patches_index": settings.patches_index_path}
+    for name in ("episodes_index_path", "reference_path", "nuclei_path", "bins_path", "shape_prior_model_path"):
+        value = getattr(config, name, None)
+        if value is not None:
+            input_paths[name] = Path(value)
+    metadata["input_fingerprints"] = {name: file_fingerprint(path) for name, path in input_paths.items()}
+    _write_json(run_dir / "metadata.json", metadata)
+    if run_cfg.get('archive_source', False) or str(run_cfg.get('purpose', 'development')) == 'formal':
+        from hd_cell_rl.experiment_protocol import write_experiment_manifest
+        write_experiment_manifest(run_dir, config=patch_config_used, inputs=input_paths,
+            protocol={'role': run_cfg.get('purpose', 'development'), 'validation': validation_cfg,
+                      'test_consumed': False, 'reward_changed': False})
 
     device = _resolve_device(device_name)
     rollout_devices = _resolve_rollout_devices(rollout_device_names, fallback=device)
@@ -201,7 +224,10 @@ def main() -> None:
     model = build_actor_critic_from_config(config, device=device)
     warm_start_info = None
     if warm_start_checkpoint is not None:
-        warm_start_info = _load_warm_start_weights(model=model, checkpoint_path=warm_start_checkpoint, device=device)
+        warm_start_info = _load_warm_start_weights(model=model, checkpoint_path=warm_start_checkpoint, device=device,
+            expected_contract=checkpoint_contract(training_unit="patch", agent_mode=settings.agent_mode,
+                reward_backend=settings.reward_backend, rollout_backend=settings.rollout_backend),
+            allow_semantic_transfer=bool(run_cfg.get("allow_semantic_warm_start", False)))
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config.learning_rate), weight_decay=float(config.weight_decay))
 
     steps_log = logs_dir / "steps.jsonl"
@@ -230,14 +256,15 @@ def main() -> None:
             "agent_mode": settings.agent_mode,
             "after_fill_actions": settings.after_fill_actions,
             "global_delta_epsilon": settings.global_delta_epsilon,
-            "warm_start_checkpoint": None if warm_start_checkpoint is None else str(warm_start_checkpoint),
             "em_assignment": _serialize_em_assignment_config(settings.em_assignment),
+            "warm_start_checkpoint": None if warm_start_checkpoint is None else str(warm_start_checkpoint),
             "warm_start_info": warm_start_info,
         },
     )
 
     reward_history: list[float] = []
     best_moving_avg: float | None = None
+    best_validation_score: float | None = None
     best_checkpoint: Path | None = None
     no_improve = 0
     logs: list[dict[str, Any]] = []
@@ -337,6 +364,9 @@ def main() -> None:
                     "time_cache_sec": float(cache_sec),
                 },
             )
+            # These rollouts evaluated the pre-update policy, not the updated one.
+            evaluated_model_state = copy.deepcopy(model.state_dict())
+            evaluated_optimizer_state = copy.deepcopy(optimizer.state_dict())
             metrics = patch_ppo_update(
                 model=model,
                 optimizer=optimizer,
@@ -367,7 +397,7 @@ def main() -> None:
             reward_history.append(avg_patch_score)
             moving_avg = None
             checkpoint_saved = False
-            if len(reward_history) >= int(config.moving_avg_window):
+            if validation_evaluator is None and len(reward_history) >= int(config.moving_avg_window):
                 moving_avg = float(np.mean(reward_history[-int(config.moving_avg_window) :]))
                 if best_moving_avg is None or moving_avg > best_moving_avg + float(config.min_improvement):
                     best_moving_avg = moving_avg
@@ -378,15 +408,34 @@ def main() -> None:
                         path=best_checkpoint,
                         model=model,
                         optimizer=optimizer,
-                        update_index=update_idx,
+                        update_index=update_idx - 1,
                         best_moving_avg_reward=best_moving_avg,
                         base_config=config,
                         patch_config=patch_config_used,
+                        model_state=evaluated_model_state,
+                        optimizer_state=evaluated_optimizer_state,
+                        selection_basis="training_rollout_moving_average_pre_update",
                     )
                 else:
                     no_improve += 1
 
+            validation_result = None
+            if validation_evaluator is not None and (update_idx % validation_evaluator.every == 0 or update_idx == max_updates):
+                validation_result = validation_evaluator.evaluate(model, device)
+                score = validation_result['mean_core_cell_iou']
+                if best_validation_score is None or score > best_validation_score + float(config.min_improvement):
+                    best_validation_score = score
+                    no_improve = 0
+                    checkpoint_saved = True
+                    best_checkpoint = checkpoints_dir / 'best_model.pt'
+                    _save_patch_checkpoint(path=best_checkpoint, model=model, optimizer=optimizer,
+                        update_index=update_idx, best_moving_avg_reward=None, base_config=config,
+                        patch_config=patch_config_used, selection_basis='validation_core_cell_iou_post_update')
+                else:
+                    no_improve += 1
+                _append_step_log(steps_log, 'validation_complete', {'update_index': update_idx, **validation_result})
             row = {
+                'validation': validation_result,
                 "update_index": update_idx,
                 "average_batch_reward": avg_patch_score,
                 "average_raw_patch_reward": avg_raw_reward,
@@ -416,7 +465,8 @@ def main() -> None:
             }
             logs.append(row)
             _append_step_log(steps_log, "update_complete", {**row, "checkpoint_saved": checkpoint_saved})
-            if len(reward_history) >= int(config.moving_avg_window) and no_improve >= int(config.patience):
+            if ((validation_result is not None if validation_evaluator is not None else len(reward_history) >= int(config.moving_avg_window))
+                    and no_improve >= int(config.patience)):
                 _append_step_log(steps_log, "early_stop", {"update_index": update_idx, "no_improve_count": no_improve})
                 break
     finally:
@@ -424,22 +474,27 @@ def main() -> None:
             process_pool.shutdown(wait=True, cancel_futures=True)
         dataset.close()
 
+    final_checkpoint = checkpoints_dir / "final_model.pt"
+    _save_patch_checkpoint(
+        path=final_checkpoint,
+        model=model,
+        optimizer=optimizer,
+        update_index=len(logs),
+        best_moving_avg_reward=best_moving_avg,
+        base_config=config,
+        patch_config=patch_config_used,
+    )
     if best_checkpoint is None:
-        best_checkpoint = checkpoints_dir / "final_model.pt"
-        _save_patch_checkpoint(
-            path=best_checkpoint,
-            model=model,
-            optimizer=optimizer,
-            update_index=len(logs),
-            best_moving_avg_reward=best_moving_avg,
-            base_config=config,
-            patch_config=patch_config_used,
-        )
+        best_checkpoint = final_checkpoint
     _write_json(
         run_dir / "summary.json",
         {
             "run_dir": str(run_dir),
             "best_checkpoint_path": str(best_checkpoint),
+            "final_checkpoint_path": str(final_checkpoint),
+            "checkpoint_selection_basis": ('validation_core_cell_iou_post_update' if validation_evaluator is not None
+                                           else 'training_rollout_moving_average_pre_update (not held-out validation)'),
+            'best_validation_core_cell_iou': best_validation_score,
             "best_moving_average_reward": best_moving_avg,
             "updates_completed": len(logs),
             "training_unit": "patch",
@@ -458,8 +513,10 @@ def main() -> None:
             "agent_mode": settings.agent_mode,
             "after_fill_actions": settings.after_fill_actions,
             "global_delta_epsilon": settings.global_delta_epsilon,
+            "em_assignment": _serialize_em_assignment_config(
+                settings.em_assignment
+            ),
             "warm_start_checkpoint": None if warm_start_checkpoint is None else str(warm_start_checkpoint),
-            "em_assignment": _serialize_em_assignment_config(settings.em_assignment),
             "warm_start_info": warm_start_info,
         },
     )
@@ -476,26 +533,38 @@ def _save_patch_checkpoint(
     best_moving_avg_reward: float | None,
     base_config: Any,
     patch_config: dict[str, Any],
+    model_state: dict | None = None,
+    optimizer_state: dict | None = None,
+    selection_basis: str = "final_post_update",
 ) -> None:
-    torch.save(
+    settings = patch_config.get("patch_training", {})
+    atomic_save_checkpoint(
         {
             "update_index": int(update_index),
             "best_moving_avg_reward": best_moving_avg_reward,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
+            "model_state_dict": model.state_dict() if model_state is None else model_state,
+            "optimizer_state_dict": optimizer.state_dict() if optimizer_state is None else optimizer_state,
             "config": base_config.to_serializable_dict(),
             "patch_config": patch_config,
             "training_unit": "patch",
+            "selection_basis": selection_basis,
+            "feature_contract": checkpoint_contract(training_unit="patch",
+                agent_mode=str(settings.get("agent_mode", "multi_cell")),
+                reward_backend=str(settings.get("reward_backend", "standard")),
+                rollout_backend=str(settings.get("rollout_backend", "legacy_cpu"))),
         },
         path,
     )
 
 
-def _load_warm_start_weights(*, model: torch.nn.Module, checkpoint_path: Path, device: torch.device) -> dict[str, Any]:
+def _load_warm_start_weights(*, model: torch.nn.Module, checkpoint_path: Path, device: torch.device,
+                             expected_contract: dict | None = None, allow_semantic_transfer: bool = False) -> dict[str, Any]:
     """Initialize matching model tensors from a previous single-cell checkpoint."""
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"warm-start checkpoint not found: {checkpoint_path}")
     payload = load_checkpoint_payload(checkpoint_path)
+    validate_checkpoint_contract(payload, expected=expected_contract or checkpoint_contract(),
+                                 allow_semantic_transfer=allow_semantic_transfer)
     source_state = payload.get("model_state_dict")
     if not isinstance(source_state, dict):
         raise ValueError(f"warm-start checkpoint missing model_state_dict: {checkpoint_path}")
@@ -813,7 +882,8 @@ def _apply_base_config_overrides(config: Any, overrides: dict[str, Any]) -> Any:
 
 def _parse_score_normalization(value: str) -> str:
     normalized = value.strip().lower()
-    allowed = {"mean_core_cells", "sqrt_core_cells", "sum_core_cells", "mean_expression_bins", "sqrt_expression_bins"}
+    allowed = {"mean_core_cells", "sqrt_core_cells", "sum_core_cells", "mean_expression_bins", "sqrt_expression_bins",
+               "mean_patch_cells", "sqrt_patch_cells", "sum_patch_cells"}
     if normalized not in allowed:
         raise ValueError(f"patch_training.score_normalization must be one of {sorted(allowed)}")
     return normalized
@@ -913,7 +983,10 @@ def _configure_threads(device: torch.device, config: Any) -> None:
     if device.type != "cpu":
         return
     torch.set_num_threads(max(1, int(config.n_rollout_workers)))
-    torch.set_num_interop_threads(1)
+    # PyTorch allows setting this only once per process. Re-entering the runner
+    # in CPU regression tests must not reset an already-correct thread pool.
+    if torch.get_num_interop_threads() != 1:
+        torch.set_num_interop_threads(1)
 
 
 if __name__ == "__main__":

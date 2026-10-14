@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import json
 import os
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy.io import mmread
 from scipy.sparse import csc_matrix
+from .provenance import file_fingerprint
 
 
 LOGGER = logging.getLogger(__name__)
@@ -26,8 +28,9 @@ def resolve_matrix_csc_h5_path(matrix_path: str | Path) -> Path:
     - existing `.h5` file
     - 10x matrix directory containing `matrix.mtx[.gz]`, `barcodes.tsv.gz`, `features.tsv.gz`
 
-    If a directory is passed and a sibling `<dir>.h5` exists, that sibling is used.
-    Otherwise a cached CSC H5 is created once under `<dir>/.rl_cache/matrix_csc_cache.h5`.
+    Directories always identify their own MTX/barcode/features files. Pass an
+    H5 explicitly to use it; sibling H5 files are never silently substituted.
+    A cached CSC H5 is created under `<dir>/.rl_cache/matrix_csc_cache.h5`.
     """
     source = Path(matrix_path).expanduser().resolve()
     if source.is_file():
@@ -38,10 +41,6 @@ def resolve_matrix_csc_h5_path(matrix_path: str | Path) -> Path:
         raise FileNotFoundError(f"matrix source not found: {source}")
     if not source.is_dir():
         raise ValueError(f"matrix source must be a .h5 file or 10x matrix directory: {source}")
-
-    sibling_h5 = source.with_suffix(".h5")
-    if sibling_h5.exists():
-        return sibling_h5.resolve()
 
     matrix_mtx_path = _resolve_matrix_mtx_path(source)
     barcodes_path = source / "barcodes.tsv.gz"
@@ -173,8 +172,14 @@ def _read_features_tsv(path: Path) -> pd.DataFrame:
 def _is_cache_fresh(cache_h5_path: Path, source_paths: list[Path]) -> bool:
     if not cache_h5_path.exists():
         return False
-    cache_mtime = cache_h5_path.stat().st_mtime
-    return all(cache_mtime >= p.stat().st_mtime for p in source_paths if p.exists())
+    if not all(p.is_file() for p in source_paths):
+        return False
+    try:
+        with h5py.File(cache_h5_path, "r") as handle:
+            recorded = json.loads(handle.attrs.get("source_fingerprints", "null"))
+            return recorded == [file_fingerprint(p) for p in source_paths]
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def _build_cached_h5_from_10x_dir(
@@ -186,6 +191,8 @@ def _build_cached_h5_from_10x_dir(
     cache_h5_path: Path,
 ) -> None:
     LOGGER.info("Building cached CSC H5 from 10x matrix directory: %s", matrix_dir)
+    source_paths = [matrix_mtx_path, barcodes_path, features_path]
+    fingerprints = [file_fingerprint(p) for p in source_paths]
     feature_df = _read_features_tsv(features_path)
     barcodes = _read_barcodes_tsv(barcodes_path)["barcode"].tolist()
 
@@ -193,6 +200,8 @@ def _build_cached_h5_from_10x_dir(
     if not isinstance(matrix, csc_matrix):
         matrix = matrix.tocsc()
     matrix.sort_indices()
+    if matrix.shape != (len(feature_df), len(barcodes)):
+        raise ValueError("matrix dimensions do not match features/barcodes metadata")
 
     data = np.asarray(matrix.data)
     if np.issubdtype(data.dtype, np.integer):
@@ -229,7 +238,10 @@ def _build_cached_h5_from_10x_dir(
 
             h5.attrs["source_matrix_dir"] = str(matrix_dir)
             h5.attrs["source_format"] = "10x_mtx_dir"
+            h5.attrs["source_fingerprints"] = json.dumps(fingerprints, sort_keys=True)
 
+        if fingerprints != [file_fingerprint(p) for p in source_paths]:
+            raise RuntimeError("matrix source changed while building cache; retry with stable inputs")
         os.replace(tmp_path, cache_h5_path)
     except Exception:
         try:

@@ -213,6 +213,23 @@ class PPOTrainingTests(unittest.TestCase):
         self.assertEqual(float(config.w2), 0.0)
         self.assertEqual(float(config.w3), 0.0)
 
+    def test_load_config_allows_w5_only_expression_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = self._write_minimal_config(
+                Path(tmp_dir), batch_cells=2, group_relative_enabled=True
+            )
+            with config_path.open("r", encoding="utf-8") as handle:
+                config_data = yaml.safe_load(handle)
+            config_data["reward"]["w1"] = 0.0
+            config_data["reward"]["w5"] = 0.15
+            with config_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(config_data, handle, sort_keys=False)
+
+            config = load_ppo_training_config(config_path)
+
+        self.assertEqual(float(config.w1), 0.0)
+        self.assertAlmostEqual(float(config.w5), 0.15)
+
     def test_load_config_parses_competition_margin_defaults_and_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

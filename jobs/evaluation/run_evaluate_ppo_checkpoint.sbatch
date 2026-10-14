@@ -30,28 +30,28 @@ export TORCH_NUM_INTEROP_THREADS=1
 unset KMP_LOGFILE || true
 unset LOGFILE || true
 
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-runs/human_colorectal_full_grpo_20260508T171415Z/checkpoints/best_model.pt}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-}"
 PPO_CONFIG="${PPO_CONFIG:-}"
 EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-}"
 MAX_EPISODES="${MAX_EPISODES:-300}"
 POLICY_MODE="${POLICY_MODE:-greedy}"
 RUN_DEVICE="${RUN_DEVICE:-auto}"
 EVAL_SEED="${EVAL_SEED:-7}"
-RUN_NAME="${RUN_NAME:-human_colorectal_ppo_eval}"
+RUN_NAME="${RUN_NAME:-colorectal_nucleus_based_ppo_eval}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-runs}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-300}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-top_reward}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
 GT_MIN_NUCLEAR_OVERLAP_FRAC="${GT_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 GT_MIN_NUCLEAR_OVERLAP_BINS="${GT_MIN_NUCLEAR_OVERLAP_BINS:-2}"
 
 if [[ -z "$CHECKPOINT_PATH" ]]; then
   echo "CHECKPOINT_PATH is required." >&2
   echo "Example:" >&2
-  echo "  sbatch --export=ALL,CHECKPOINT_PATH=runs/human_colorectal_ppo_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt jobs/evaluation/run_evaluate_ppo_checkpoint.sbatch" >&2
+  echo "  sbatch --export=ALL,CHECKPOINT_PATH=runs/colorectal_nucleus_based_ppo_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt jobs/evaluation/run_evaluate_ppo_checkpoint.sbatch" >&2
   exit 1
 fi
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then

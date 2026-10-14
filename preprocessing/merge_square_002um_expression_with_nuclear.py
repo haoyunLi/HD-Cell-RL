@@ -97,7 +97,10 @@ def build_square_002um_rl_metadata(
     if microns_per_pixel <= 0:
         raise ValueError("microns_per_pixel must be > 0")
 
-    claims_df = _load_nuclear_claims(nuclear_path)
+    claims_df = _load_nuclear_claims(
+        nuclear_path,
+        microns_per_pixel=float(microns_per_pixel),
+    )
     LOGGER.info("Loaded %d nuclear claim rows", len(claims_df))
 
     nuclear_barcode_df = _aggregate_nuclear_claims_to_barcodes(claims_df)
@@ -198,7 +201,11 @@ def write_rl_metadata_outputs(
     }
 
 
-def _load_nuclear_claims(path: Path) -> pd.DataFrame:
+def _load_nuclear_claims(
+    path: Path,
+    *,
+    microns_per_pixel: float = DEFAULT_MICRONS_PER_PIXEL,
+) -> pd.DataFrame:
     """Load nuclear claims and validate required columns."""
     df = pd.read_csv(path, compression="infer")
     required = [
@@ -214,11 +221,23 @@ def _load_nuclear_claims(path: Path) -> pd.DataFrame:
         "cell_id",
         "cell_type",
         "weight",
-        "nuclear_pixel_count",
     ]
     missing = [col for col in required if col not in df.columns]
     if missing:
         raise ValueError(f"nuclear annotation file is missing required columns: {missing}")
+    if "nuclear_pixel_count" not in df.columns:
+        if "nuclear_fraction" not in df.columns:
+            raise ValueError(
+                "nuclear annotation file requires nuclear_pixel_count or nuclear_fraction"
+            )
+        fraction = pd.to_numeric(df["nuclear_fraction"], errors="raise")
+        if ((fraction <= 0.0) | (fraction > 1.0 + 1.0e-8)).any():
+            raise ValueError("nuclear_fraction must lie in (0, 1]")
+        pixels_per_square_002um = (2.0 / float(microns_per_pixel)) ** 2
+        df["nuclear_pixel_count"] = np.maximum(
+            1,
+            np.rint(fraction.to_numpy(dtype=np.float64) * pixels_per_square_002um),
+        ).astype(np.int32)
     df["barcode"] = df["barcode"].astype(str)
     return df
 

@@ -12,7 +12,7 @@ base_config_overrides:
     weight: 0.65
 
 run:
-  name: human_colorectal_patch_full_grpo
+  name: colorectal_nucleus_based_patch_full_grpo
   output_root: runs
   seed: 7
   device: cpu
@@ -20,7 +20,7 @@ run:
   max_updates: 500
   policy_mode: sample
   vf_coef: 0.0
-  warm_start_checkpoint: runs/human_colorectal_full_grpo_20260508T171415Z/checkpoints/best_model.pt
+  warm_start_checkpoint: ""
 
 patch_training:
   patches_index_path: runs/example_patch_episode_build/patches_index.csv

@@ -31,14 +31,14 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib_${SLURM_JOB_ID:-$$}}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/xdg_cache_${SLURM_JOB_ID:-$$}}"
 mkdir -p "$PYTHONPYCACHEPREFIX" "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-runs/human_colorectal_patch_overfit4_20260611T171558Z/checkpoints/best_model.pt}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-}"
 BASE_CONFIG="${BASE_CONFIG:-}"
-EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-runs/human_colorectal_episode_build_20260529T212230Z/episodes_index.csv}"
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_ppo_eval_20260511T153658Z}"
-PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/human_colorectal_patch_episode_build/human_colorectal_patches_overfit4_64um_index.csv}"
-OUTPUT_DIR="${OUTPUT_DIR:-runs/human_colorectal_patch_overfit4_eval_intermediate}"
+EPISODES_INDEX_PATH="${EPISODES_INDEX_PATH:-}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
+PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_overfit4_64um_index.csv}"
+OUTPUT_DIR="${OUTPUT_DIR:-runs/colorectal_nucleus_based_patch_overfit4_eval_intermediate}"
 EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-runs}"
-EVAL_RUN_NAME="${EVAL_RUN_NAME:-human_colorectal_patch_overfit4_eval}"
+EVAL_RUN_NAME="${EVAL_RUN_NAME:-colorectal_nucleus_based_patch_overfit4_eval}"
 POLICY_MODE="${POLICY_MODE:-greedy}"
 RUN_DEVICE="${RUN_DEVICE:-cuda}"
 ROLLOUT_DEVICES="${ROLLOUT_DEVICES:-cuda:0,cuda:1,cuda:2,cuda:3}"
@@ -46,18 +46,18 @@ ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-torch_gpu}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-1000}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-first}"
 EVAL_SEED="${EVAL_SEED:-7}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
-EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-PUBLISH_GITHUB_PAGES="${PUBLISH_GITHUB_PAGES:-true}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
+EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+PUBLISH_GITHUB_PAGES="${PUBLISH_GITHUB_PAGES:-false}"
 PAGES_REMOTE="${PAGES_REMOTE:-origin}"
 
 if [[ -z "$CHECKPOINT_PATH" ]]; then
   echo "CHECKPOINT_PATH is required." >&2
   echo "Example:" >&2
-  echo "  sbatch --export=ALL,CHECKPOINT_PATH=runs/human_colorectal_patch_overfit4_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt jobs/evaluation/run_evaluate_patch_overfit4.sbatch" >&2
+  echo "  sbatch --export=ALL,CHECKPOINT_PATH=runs/colorectal_nucleus_based_patch_overfit4_YYYYMMDDTHHMMSSZ/checkpoints/best_model.pt jobs/evaluation/run_evaluate_patch_overfit4.sbatch" >&2
   exit 1
 fi
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
@@ -69,6 +69,19 @@ if [[ -z "$BASE_CONFIG" ]]; then
 fi
 if [[ ! -f "$BASE_CONFIG" ]]; then
   echo "Base config file not found: $BASE_CONFIG" >&2
+  exit 1
+fi
+if [[ -z "$EPISODES_INDEX_PATH" ]]; then
+  LATEST_EPISODE_RUN=$(ls -dt runs/colorectal_nucleus_based_episode_build_* 2>/dev/null | head -n 1 || true)
+  if [[ -n "$LATEST_EPISODE_RUN" ]]; then
+    EPISODES_INDEX_PATH="$LATEST_EPISODE_RUN/episodes_index.csv"
+  fi
+fi
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_ppo_eval_* 2>/dev/null | head -n 1 || true)
+fi
+if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
+  echo "Current nucleus-based PPO eval run not found. Set PPO_EVAL_RUN_DIR." >&2
   exit 1
 fi
 if [[ ! -f "$EPISODES_INDEX_PATH" ]]; then

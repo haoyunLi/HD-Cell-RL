@@ -402,28 +402,34 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Run SMURF spatial transcriptomics analysis')
     parser.add_argument('--tissue_positions', type=str,
-                       default='colorectal_pseudo_visium_hd_output_full_0.25/spatial/tissue_positions.parquet',
+                       default='colorectal_nucleus_based/spatial/tissue_positions.parquet',
                        help='Path to tissue positions parquet file')
     parser.add_argument('--tissue_image', type=str,
                        default='Human_Colorectal/input/Visium_HD_Human_Colon_Cancer_tissue_image.btf',
                        help='Path to full-resolution tissue image aligned to tissue_positions')
     parser.add_argument('--pseudo_hd_dir', type=str,
-                       default='colorectal_pseudo_visium_hd_output_full_0.25',
+                       default='colorectal_nucleus_based',
                        help='Path to pseudo Visium HD output directory')
     parser.add_argument('--output_dir', type=str,
-                       default='workspace_outputs/pseudo_human_colorectal/smurf_results_colorectal_0.25',
+                       default='workspace_outputs/colorectal_nucleus_based/smurf_results',
                        help='Output directory for SMURF results')
     parser.add_argument('--dataset_name', type=str,
-                       default='human_colorectal',
+                       default='colorectal_nucleus_based',
                        help='Dataset name prefix for saved outputs')
     parser.add_argument('--microns_per_pixel', type=float,
                        default=0.2737012522439323,
                        help='Microns per pixel conversion factor')
     parser.add_argument('--external_nuclear_bins_path', type=str, default=None,
                        help='Optional PPO-aligned nuclear-bin CSV/CSV.GZ. If provided, skip SMURF H&E nuclei segmentation.')
+    parser.add_argument('--resume_finalization', action='store_true',
+                       help='Reuse arrangement/optimization checkpoints and rerun only finalization.')
+    parser.add_argument('--skip_final_plot', action='store_true',
+                       help='Skip expensive whole-section diagnostic plots.')
+    parser.add_argument('--skip_so_pickle', action='store_true',
+                       help='Skip the large spatial-object pickle; assignments and final AnnData are still saved.')
     add_ppo_format_assignment_eval_args(
         parser,
-        default_eval_run_name='human_colorectal_smurf_eval',
+        default_eval_run_name='colorectal_nucleus_based_smurf_eval',
         method_label='SMURF',
     )
     args = parser.parse_args()
@@ -437,11 +443,18 @@ def main():
     save_path.mkdir(parents=True, exist_ok=True)
 
     so = su.prepare_dataframe_image(args.tissue_positions, args.tissue_image, 'HE')
-    plt.imshow(so.image_temp())
-    plt.savefig(save_path / 'tissue_image.png', dpi=300, bbox_inches='tight')
-    plt.close()
+    if not args.resume_finalization:
+        plt.imshow(so.image_temp())
+        plt.savefig(save_path / 'tissue_image.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
     segmentation_path = save_path / 'segmentation_final.npy'
-    if external_nuclear_bins_path is not None:
+    if args.resume_finalization:
+        if not segmentation_path.exists():
+            raise FileNotFoundError(f"Missing resume checkpoint: {segmentation_path}")
+        print(f"Loading segmentation checkpoint: {segmentation_path}")
+        so.segmentation_final = np.load(segmentation_path)
+    elif external_nuclear_bins_path is not None:
         print("External nuclear bins provided. Skipping SMURF H&E nuclei segmentation.")
         build_external_segmentation_from_nuclear_bins(so, external_nuclear_bins_path)
         np.save(segmentation_path, so.segmentation_final)
@@ -490,8 +503,9 @@ def main():
     so.generate_cell_spots_information()
 
     # Visualize segmentation results
-    su.plot_results(so.image_temp(), so.segmentation_final, dpi=1500,
-                    save=os.path.join(save_path, 'segmentation_overlay.png'))
+    if not args.resume_finalization and not args.skip_final_plot:
+        su.plot_results(so.image_temp(), so.segmentation_final, dpi=1500,
+                        save=os.path.join(save_path, 'segmentation_overlay.png'))
 
     # Load gene expression data
     print("Loading gene expression data...")
@@ -501,23 +515,32 @@ def main():
     # Filter genes
     sc.pp.filter_genes(adata, min_counts=100)
 
-    # Generate nuclei*genes matrix
-    print("Generating nuclei-genes matrix...")
-    su.nuclei_rna(adata, so)
-    adata_sc = copy.deepcopy(so.final_nuclei)
+    if args.resume_finalization:
+        print("Rebuilding barcode-index mapping for checkpoint finalization...")
+        so.set_toindex_data = {}
+        for index, barcode in enumerate(adata.obs_names.astype(str)):
+            parts = barcode.split("_")
+            so.set_toindex_data[
+                (int(parts[2]), int(parts[3].split("-")[0]))
+            ] = index
+    else:
+        # Generate nuclei*genes matrix
+        print("Generating nuclei-genes matrix...")
+        su.nuclei_rna(adata, so)
+        adata_sc = copy.deepcopy(so.final_nuclei)
 
-    # Filter cells
-    sc.pp.filter_cells(adata_sc, min_counts=500)
-    adata_raw = copy.deepcopy(adata_sc)
+        # Filter cells
+        sc.pp.filter_cells(adata_sc, min_counts=500)
+        adata_raw = copy.deepcopy(adata_sc)
 
-    # Initial single cell analysis
-    print("Performing initial single cell analysis...")
-    adata_sc = su.singlecellanalysis(adata_sc, resolution=0.5)
-
-    # Iterative arrangement (this is time-consuming)
-    print("Starting iterative arrangement (this may take a while)...")
-    su.itering_arragement(adata_sc, adata_raw, adata, so, resolution=0.5,
-                         save_folder=os.path.abspath(save_path) + '/', show=True, keep_previous=False)
+        # Initial single cell analysis and iterative arrangement
+        print("Performing initial single cell analysis...")
+        adata_sc = su.singlecellanalysis(adata_sc, resolution=0.5)
+        print("Starting iterative arrangement (this may take a while)...")
+        su.itering_arragement(
+            adata_sc, adata_raw, adata, so, resolution=0.5,
+            save_folder=os.path.abspath(save_path) + '/', show=True, keep_previous=False,
+        )
 
     # Load iteration results
     adatas_path = save_path / 'adatas.h5ad'
@@ -548,31 +571,36 @@ def main():
     cells_before_ml, cells_before_ml_x, groups_combined, spots_id_dic, spots_id_dic_prop = \
         su.make_preparation(cells_final, so, adatas_final, adata, weights_record, maximum_cells=2000)
 
-    # Setup CUDA for optimization
-    import torch
-    import gc
+    spot_cell_path = save_path / 'spot_cell_dic.pkl'
+    if args.resume_finalization:
+        if not spot_cell_path.exists():
+            raise FileNotFoundError(f"Missing resume checkpoint: {spot_cell_path}")
+        print(f"Loading optimization checkpoint: {spot_cell_path}")
+        with spot_cell_path.open('rb') as file:
+            spot_cell_dic = pickle.load(file)
+    else:
+        # Setup CUDA for optimization
+        import gc
+        import torch
 
-    # Clear any existing GPU cache
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
 
-    # Enable memory fragmentation fix
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+        print("Starting deep learning optimization...")
+        spot_cell_dic = su.start_optimization(
+            spots_X_dic, celltypes_dic, cells_X_plus_dic,
+            nonzero_indices_toml, device,
+            num_epochs=1000, learning_rate=0.1,
+            print_each=100, epsilon=0.00001,
+        )
 
-    # Start optimization
-    print("Starting deep learning optimization...")
-    spot_cell_dic = su.start_optimization(spots_X_dic, celltypes_dic, cells_X_plus_dic,
-                                         nonzero_indices_toml, device,
-                                         num_epochs=1000, learning_rate=0.1,
-                                         print_each=100, epsilon=0.00001)
-
-    # Save optimization results
-    with open(save_path / 'spot_cell_dic.pkl', 'wb') as f:
-        pickle.dump(spot_cell_dic, f)
+        with spot_cell_path.open('wb') as file:
+            pickle.dump(spot_cell_dic, file)
 
     # Generate final pixel-to-cell mapping
     print("Generating final pixel-to-cell mapping...")
@@ -580,8 +608,9 @@ def main():
                         spots_id_dic_prop, nonzero_indices_dic)
 
     # Plot final results
-    su.plot_results(so.image_temp(), so.pixels_cells, dpi=1500,
-                   save=save_path / 'final_results.pdf')
+    if not args.skip_final_plot:
+        su.plot_results(so.image_temp(), so.pixels_cells, dpi=1500,
+                        save=save_path / 'final_results.pdf')
 
     # Generate final cell-level data
     print("Generating final cell-level data...")
@@ -589,78 +618,6 @@ def main():
                                     cells_before_ml, groups_combined, pct_toml_dic,
                                     nonzero_indices_dic, spots_X_dic,
                                     cells_before_ml_x=cells_before_ml_x, so=so)
-
-    # Save nuclear bin information for validation
-    print("\nSaving nuclear bin information for each final cell...")
-
-    # Create nuclear bin mapping from segmentation_final and pixels_cells
-    # so.segmentation_final = nuclear segmentation mask (which pixels are nuclear)
-    # so.pixels_cells = final pixel-to-cell mapping (which pixels belong to which cell)
-
-    print("  Building nuclear bin information from segmentation and cell assignments...")
-
-    # Get unique cell IDs from pixels_cells
-    unique_cells = np.unique(so.pixels_cells)
-    unique_cells = unique_cells[unique_cells > 0]  # Exclude background (0)
-
-    # Bin size parameters (matching validation scripts)
-    microns_per_pixel = args.microns_per_pixel
-    bin_size = 2.0  # 2 micron bins
-
-    # Dictionaries to store bin information per cell
-    cell_nuclear_bins = {}  # cell_id -> set of (bin_x, bin_y) that are nuclear
-    cell_all_bins = {}      # cell_id -> set of all (bin_x, bin_y)
-
-    print(f"  Processing {len(unique_cells)} cells...")
-
-    for cell_id in unique_cells:
-        # Get pixel coordinates for this cell from pixels_cells
-        y_coords, x_coords = np.where(so.pixels_cells == cell_id)
-
-        # Convert pixels to bins and track nuclear status
-        all_bins_set = set()
-        nuclear_bins_set = set()
-
-        for y, x in zip(y_coords, x_coords):
-            # Convert pixel to bin coordinates
-            bin_x = int(x * microns_per_pixel / bin_size)
-            bin_y = int(y * microns_per_pixel / bin_size)
-            all_bins_set.add((bin_x, bin_y))
-
-            # Check if this pixel is nuclear (from initial segmentation)
-            if so.segmentation_final[y, x] > 0:
-                nuclear_bins_set.add((bin_x, bin_y))
-
-        cell_all_bins[int(cell_id)] = all_bins_set
-        cell_nuclear_bins[int(cell_id)] = nuclear_bins_set
-
-    # Save nuclear bin information
-    print(f"  Saving nuclear bin information for {len(cell_nuclear_bins)} cells...")
-    with open(save_path / 'cell_nuclear_bins.pkl', 'wb') as f:
-        pickle.dump({
-            'nuclear_bins': cell_nuclear_bins,
-            'all_bins': cell_all_bins
-        }, f)
-
-    # Calculate and save summary statistics
-    cell_stats = []
-    for cell_id in unique_cells:
-        n_total = len(cell_all_bins[int(cell_id)])
-        n_nuclear = len(cell_nuclear_bins[int(cell_id)])
-        nuclear_pct = (n_nuclear / n_total * 100) if n_total > 0 else 0.0
-
-        cell_stats.append({
-            'cell_id': int(cell_id),
-            'n_total_bins': n_total,
-            'n_nuclear_bins': n_nuclear,
-            'nuclear_percentage': nuclear_pct
-        })
-
-    df_nuclear_stats = pd.DataFrame(cell_stats)
-    df_nuclear_stats.to_csv(save_path / 'cell_nuclear_bins_summary.csv', index=False)
-
-    print(f"  Mean nuclear bins per cell: {df_nuclear_stats['n_nuclear_bins'].mean():.1f}")
-    print(f"  Mean nuclear percentage: {df_nuclear_stats['nuclear_percentage'].mean():.2f}%")
 
     assignments_path = save_smurf_assignments(
         so=so,
@@ -674,6 +631,40 @@ def main():
         dataset_name=args.dataset_name,
         microns_per_pixel=args.microns_per_pixel,
         external_nuclear_bins_path=external_nuclear_bins_path,
+    )
+
+    # Derive diagnostics directly from final 2um-bin assignments. Scanning the
+    # full pixel mask once per cell is O(n_cells * n_pixels); this groupby is
+    # O(n_assigned_bins) and does not change the SMURF assignments.
+    print("\nSaving nuclear-bin summary from final bin assignments...")
+    assignment_flags = pd.read_csv(
+        assignments_path,
+        usecols=["cell_id", "is_nuclear"],
+    )
+    assignment_flags["is_nuclear"] = coerce_bool_series(
+        assignment_flags["is_nuclear"]
+    ).fillna(False)
+    df_nuclear_stats = (
+        assignment_flags.groupby("cell_id", sort=True)["is_nuclear"]
+        .agg(n_total_bins="size", n_nuclear_bins="sum")
+        .reset_index()
+    )
+    df_nuclear_stats["nuclear_percentage"] = np.where(
+        df_nuclear_stats["n_total_bins"] > 0,
+        100.0
+        * df_nuclear_stats["n_nuclear_bins"]
+        / df_nuclear_stats["n_total_bins"],
+        0.0,
+    )
+    df_nuclear_stats.to_csv(
+        save_path / "cell_nuclear_bins_summary.csv",
+        index=False,
+    )
+    print(f"  Summarized {len(df_nuclear_stats)} cells")
+    print(f"  Mean nuclear bins per cell: {df_nuclear_stats['n_nuclear_bins'].mean():.1f}")
+    print(
+        "  Mean nuclear percentage: "
+        f"{df_nuclear_stats['nuclear_percentage'].mean():.2f}%"
     )
 
     pipeline_summary = {
@@ -693,8 +684,9 @@ def main():
         handle.write("\n")
 
     print("\nSaving final results...")
-    with open(save_path / "so.pkl", 'wb') as f:
-        pickle.dump(so, f)
+    if not args.skip_so_pickle:
+        with open(save_path / "so.pkl", 'wb') as f:
+            pickle.dump(so, f)
 
     adata_sc_final.write(save_path / "adata_sc_final.h5ad")
 
@@ -703,7 +695,7 @@ def main():
     print(f"  so.segmentation_final: Nuclear segmentation mask (shape: {so.segmentation_final.shape})")
     if hasattr(so, 'cell_spot_dic'):
         print(f"  so.cell_spot_dic: Cells -> nuclear bins mapping ({len(so.cell_spot_dic)} cells)")
-    if hasattr(so, 'final_nuclei'):
+    if getattr(so, 'final_nuclei', None) is not None:
         print(f"  so.final_nuclei: Nuclear gene expression matrix ({so.final_nuclei.shape})")
     if hasattr(so, 'df'):
         print(f"  so.df: Bin information ({len(so.df)} bins)")
@@ -723,8 +715,10 @@ def main():
 
     print("\nSMURF analysis completed successfully!")
     print(f"Final cell-level data saved as: {save_path / 'adata_sc_final.h5ad'}")
-    print(f"Final results visualization saved as: {save_path / 'final_results.pdf'}")
-    print(f"Nuclear bin information saved in: {save_path / 'so.pkl'}")
+    if not args.skip_final_plot:
+        print(f"Final results visualization saved as: {save_path / 'final_results.pdf'}")
+    if not args.skip_so_pickle:
+        print(f"Spatial object saved as: {save_path / 'so.pkl'}")
 
 
 if __name__ == "__main__":

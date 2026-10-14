@@ -1,0 +1,64 @@
+run:
+  # Free-form run name; output folder becomes: <output_root>/<name>_<UTC timestamp>
+  name: colorectal_nucleus_based_multi_owner_v2_episode_build
+  output_root: runs
+  # Seed is used for any optional row sampling (debug limits).
+  seed: 42
+
+inputs:
+  # Current generated paths in this workspace.
+  nuclei_path: workspace_outputs/colorectal_nucleus_based_multi_owner_v2/intermediate/nuclei/colorectal_nucleus_based_multi_owner_v2_nuclei.parquet
+  bins_path: workspace_outputs/colorectal_nucleus_based_multi_owner_v2/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_multi_owner_v2_square_002um_filtered_rl.metadata.parquet
+
+  # One of: auto, csv, tsv, parquet
+  nuclei_format: auto
+  bins_format: auto
+
+  nuclei_columns:
+    cell_id: cell_id
+    center_x_um: center_x_um
+    center_y_um: center_y_um
+    radius_um: radius_um
+    # Set to null if not available yet.
+    cell_type: null
+
+  bin_columns:
+    bin_id: bin_id
+    x_um: x_um
+    y_um: y_um
+
+  expression:
+    # Real expression mode: load from a 10x matrix source via bins.matrix_col_index.
+    # This may be a .h5 file or a 10x matrix directory; directory inputs are
+    # resolved to a cached CSC H5 automatically when needed.
+    # Gene order is taken from the aligned reference NPZ so reward dims match.
+    mode: matrix_h5
+    prefix: null
+    columns: []
+    matrix_path: colorectal_nucleus_based_multi_owner_v2/filtered_feature_bc_matrix
+    matrix_col_index_column: matrix_col_index
+    # Match the active experimental dataset's donor-disjoint reference.
+    reference_npz_path: colorectal_nucleus_based_multi_owner_v2/reference/reference_counts.npz
+    reference_genes_key: genes
+    # EM competition needs an episode artifact for every physical nucleus in
+    # outer_bounds + MaxDis. Zero-expression nuclear seeds keep a diffuse q.
+    filter_empty_nuclear_cells: false
+    min_nuclear_expression_sum: 0.0
+    nuclei_chunk_size: 256
+    cache_size: 8000
+    # Direct HPC run: leave headroom for I/O and the parent process on 96 CPUs.
+    n_workers: 48
+    # Used only when artifact_layout=single_npz.
+    save_compressed: true
+    # Recommended for large matrix-backed runs: one shard directory per nuclei chunk.
+    artifact_layout: sharded_npy
+
+environment:
+  max_center_distance_um: 20.0
+  # EM uses every bin/nucleus pair inside max_center_distance_um. Keep the
+  # legacy radial-band filter disabled for EM-ready episode artifacts.
+  radius_band_um: null
+  strict_action_validation: true
+  # null means resolve automatically from number of candidate bins.
+  max_steps: null
+  default_steps_multiplier: 3

@@ -1,4 +1,5 @@
 # Core scientific computing libraries
+-r requirements-core.txt
 numpy>=1.21.0,<2.0
 pandas>=1.3.0,<2.4
 scipy>=1.8,<1.17

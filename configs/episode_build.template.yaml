@@ -1,14 +1,14 @@
 run:
   # Free-form run name; output folder becomes: <output_root>/<name>_<UTC timestamp>
-  name: human_colorectal_episode_build
+  name: colorectal_nucleus_based_episode_build
   output_root: runs
   # Seed is used for any optional row sampling (debug limits).
   seed: 42
 
 inputs:
   # Current generated paths in this workspace.
-  nuclei_path: workspace_outputs/pseudo_human_colorectal/intermediate/human_colorectal_nuclei.parquet
-  bins_path: workspace_outputs/pseudo_human_colorectal/intermediate/square_002um_filtered_nuclear/human_colorectal_square_002um_filtered_rl.metadata.parquet
+  nuclei_path: workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_nuclei.parquet
+  bins_path: workspace_outputs/colorectal_nucleus_based/intermediate/square_002um_filtered_nuclear/colorectal_nucleus_based_square_002um_filtered_rl.metadata.parquet
 
   # One of: auto, csv, tsv, parquet
   nuclei_format: auto
@@ -35,15 +35,18 @@ inputs:
     mode: matrix_h5
     prefix: null
     columns: []
-    matrix_path: colorectal_pseudo_visium_hd_output_full_0.25/filtered_feature_bc_matrix
+    matrix_path: colorectal_nucleus_based/filtered_feature_bc_matrix
     matrix_col_index_column: matrix_col_index
     reference_npz_path: workspace_outputs/pseudo_human_colorectal/intermediate/reference_sct/reference_counts_sct_tumor_aligned_hd_overlap_unique.npz
     reference_genes_key: genes
-    filter_empty_nuclear_cells: true
+    # EM competition needs an episode artifact for every physical nucleus in
+    # outer_bounds + MaxDis. Zero-expression nuclear seeds keep a diffuse q.
+    filter_empty_nuclear_cells: false
     min_nuclear_expression_sum: 0.0
     nuclei_chunk_size: 256
     cache_size: 8000
-    n_workers: 8
+    # Direct HPC run: leave headroom for I/O and the parent process on 96 CPUs.
+    n_workers: 48
     # Used only when artifact_layout=single_npz.
     save_compressed: true
     # Recommended for large matrix-backed runs: one shard directory per nuclei chunk.
@@ -51,7 +54,9 @@ inputs:
 
 environment:
   max_center_distance_um: 20.0
-  radius_band_um: 20.0
+  # EM uses every bin/nucleus pair inside max_center_distance_um. Keep the
+  # legacy radial-band filter disabled for EM-ready episode artifacts.
+  radius_band_um: null
   strict_action_validation: true
   # null means resolve automatically from number of candidate bins.
   max_steps: null

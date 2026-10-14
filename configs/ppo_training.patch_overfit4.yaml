@@ -21,13 +21,19 @@ base_config_overrides:
   shape_prior:
     weight: 0.45
   stopping:
+    moving_avg_window: 10
     patience: 5
 
 run:
-  name: human_colorectal_patch_overfit4
+  name: colorectal_nucleus_based_patch_overfit4
   output_root: runs
   seed: 7
   device: cuda
+  rollout_devices:
+    - cuda:0
+    - cuda:1
+    - cuda:2
+    - cuda:3
   rollout_worker_mode: process
   batch_patches: 16
   max_updates: 500
@@ -36,17 +42,64 @@ run:
   warm_start_checkpoint: ""
 
 patch_training:
-  patches_index_path: runs/human_colorectal_patch_episode_build/human_colorectal_patches_overfit4_64um_index.csv
-  max_steps_per_patch: 1024
+  patches_index_path: runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_overfit4_64um_index.csv
+  # Keep the controlled overfit run bounded while preserving the same
+  # positive global-delta REPLACE transition semantics.
+  max_steps_per_patch: 16
   margin_cells_compete: true
   use_core_cells_for_score: true
   score_normalization: mean_expression_bins
   force_fill_expression_bins: true
   fill_target: reachable_expression_bins
   stop_action_mode: auto_no_improve_after_filled
-  agent_mode: multi_cell_joint_global_delta
+  # EM already owns every reachable bin. Use the existing sequential
+  # multi-cell global-delta REPLACE mode so only positive ambiguous-bin
+  # replacements are exposed; joint random proposals otherwise roll back the
+  # complete first macro-step and produce zero GRPO rank signal.
+  agent_mode: multi_cell_global_delta
   after_fill_actions: replace_only
   global_delta_epsilon: 1.0e-6
   competition_margin_enabled: false
   rollout_backend: torch_gpu
   cache_patch_contexts: true
+
+em_assignment:
+  enabled: true
+  # Resolved from the episode-build environment.max_center_distance_um.
+  # reward.r_max_um is not used as the candidate radius.
+  use_existing_rl_candidate_max_distance: true
+  bin_universe:
+    non_nuclear_filter: all
+  background:
+    enabled: false
+    owned_logit_intercept: -6.0
+    expression_confidence_weight: 12.0
+  spatial_weight: 1.0
+  expression_weight: 0.25
+  damping: 0.5
+  max_iterations: 15
+  convergence:
+    top_owner_change_fraction: 0.01
+    mean_probability_change: 0.001
+    mean_profile_total_variation: 0.001
+  cell_specific_expression:
+    # Opt in after validation; false preserves the original q @ LL behavior.
+    enabled: false
+    relative_prior_strength: 1.0
+    profile_update_damping: 1.0
+    compatibility_mode: standard
+    # Used only when compatibility_mode is spatial_block_crossfit.
+    spatial_crossfit_block_size_um: 8.0
+    # Default preserves the previous nuclear-UMI-depth reliability rule.
+    reliability_mode: nuclear_depth
+    heldout_reliability_grid_size: 101
+  ambiguity:
+    # Initial experimental value; calibrate against pseudo ground truth.
+    entropy_threshold: 0.50
+  rl_integration:
+    initialize_from_em: true
+    lock_nuclear_bins: true
+    refine_ambiguous_only: true
+  artifacts:
+    save: false
+    debug_patch_ids: []

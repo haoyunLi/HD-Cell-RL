@@ -15,13 +15,16 @@ class PublishPatchDebugPagesTest(unittest.TestCase):
             root = Path(tmp)
             eval_run, manifest = _write_eval_run(root, "eval_20260810T213100Z")
             frontend_dist = _write_frontend_dist(root)
+            progress_report = _write_progress_report(root)
             site_dir = root / "site"
 
+            pages._validate_progress_report(progress_report)
             pages._build_snapshot(
                 frontend_dist=frontend_dist,
                 patch_debug_dir=eval_run / "patch_debug",
                 eval_run_dir=eval_run,
                 manifest=manifest,
+                progress_report_dir=progress_report,
                 site_dir=site_dir,
             )
 
@@ -31,6 +34,8 @@ class PublishPatchDebugPagesTest(unittest.TestCase):
             self.assertTrue((site_dir / "index.html").is_file())
             self.assertTrue((site_dir / "assets" / "app.js").is_file())
             self.assertTrue((site_dir / "patch_debug" / "patches" / "p1.json").is_file())
+            self.assertTrue((site_dir / "progress-report" / "index.html").is_file())
+            self.assertTrue((site_dir / "progress-report" / "assets" / "figure.png").is_file())
             self.assertTrue((site_dir / ".nojekyll").is_file())
             self.assertNotIn("/taiga/", (site_dir / "patch_debug" / "manifest.json").read_text(encoding="utf-8"))
 
@@ -61,6 +66,15 @@ class PublishPatchDebugPagesTest(unittest.TestCase):
 
             with self.assertRaisesRegex(pages.PublishError, "must stay inside patch_debug"):
                 pages._load_and_validate_manifest(eval_run / "patch_debug")
+
+    def test_rejects_missing_progress_report_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "progress-report"
+            report.mkdir()
+            (report / "index.html").write_text('<img src="assets/missing.png">\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(pages.PublishError, "asset not found"):
+                pages._validate_progress_report(report)
 
     def test_orphan_commit_has_no_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,6 +155,18 @@ def _write_frontend_dist(root: Path) -> Path:
     (dist / "index.html").write_text('<script src="./assets/app.js"></script>\n', encoding="utf-8")
     (dist / "assets" / "app.js").write_text("console.log('ready');\n", encoding="utf-8")
     return dist
+
+
+def _write_progress_report(root: Path) -> Path:
+    report = root / "progress-report"
+    (report / "assets").mkdir(parents=True)
+    (report / "index.html").write_text(
+        '<link rel="stylesheet" href="styles.css?v=test"><img src="assets/figure.png?v=test">\n',
+        encoding="utf-8",
+    )
+    (report / "styles.css").write_text("body { color: black; }\n", encoding="utf-8")
+    (report / "assets" / "figure.png").write_bytes(b"png")
+    return report
 
 
 def _write_site(path: Path, content: str) -> Path:

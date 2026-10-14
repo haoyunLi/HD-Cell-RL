@@ -1,0 +1,13 @@
+# Section to merge into a NEW patch-training config, not a runnable config.
+# No current run is admitted by this template. Do not change legacy run files.
+run:
+  purpose: formal
+  archive_source: true
+  admission_manifest: runs/<validated-experiment>/training_admission.json
+validation:
+  enabled: true
+  role: validation
+  patches_index_path: runs/<new-data>/validation_patches_index.csv
+  gt_cell_bins_path: runs/<new-data>/validation_dominant_cell_bins.csv.gz
+  every_updates: 10
+  seed: 20260909

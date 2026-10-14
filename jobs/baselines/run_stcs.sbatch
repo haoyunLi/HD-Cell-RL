@@ -41,11 +41,11 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib_${SLURM_JOB_ID:-$$}}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/xdg_cache_${SLURM_JOB_ID:-$$}}"
 mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
-PSEUDO_HD_DIR="${PSEUDO_HD_DIR:-colorectal_pseudo_visium_hd_output_full_0.25}"
-OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/pseudo_human_colorectal/stcs_results_colorectal_0.25}"
-DATASET_NAME="${DATASET_NAME:-human_colorectal}"
-FULL_RES_IMAGE_PATH="${FULL_RES_IMAGE_PATH:-colorectal_pseudo_visium_hd_output_full_0.25/spatial/tissue_hires_image.png}"
-EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
+PSEUDO_HD_DIR="${PSEUDO_HD_DIR:-colorectal_nucleus_based}"
+OUTPUT_DIR="${OUTPUT_DIR:-workspace_outputs/colorectal_nucleus_based/stcs_results}"
+DATASET_NAME="${DATASET_NAME:-colorectal_nucleus_based}"
+FULL_RES_IMAGE_PATH="${FULL_RES_IMAGE_PATH:-colorectal_nucleus_based/spatial/tissue_hires_image.png}"
+EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
 
 SEARCH_RADIUS="${SEARCH_RADIUS:-5}"
 LAMBDA_SPATIAL="${LAMBDA_SPATIAL:-0.5}"
@@ -58,20 +58,28 @@ FORCE_NUCLEAR_ASSIGNMENTS="${FORCE_NUCLEAR_ASSIGNMENTS:-true}"
 RESTRICT_TO_EVAL_CELLS="${RESTRICT_TO_EVAL_CELLS:-true}"
 EVAL_CONTEXT_RADIUS_BINS="${EVAL_CONTEXT_RADIUS_BINS:-10}"
 
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_ppo_eval_20260424T204220Z}"
-EVAL_RUN_NAME="${EVAL_RUN_NAME:-human_colorectal_stcs_eval}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
+EVAL_RUN_NAME="${EVAL_RUN_NAME:-colorectal_nucleus_based_stcs_eval}"
 EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-runs}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-300}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-first}"
 EVAL_SEED="${EVAL_SEED:-7}"
 PRED_MIN_NUCLEAR_OVERLAP_FRAC="${PRED_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 PRED_MIN_NUCLEAR_OVERLAP_BINS="${PRED_MIN_NUCLEAR_OVERLAP_BINS:-2}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
 GT_MIN_NUCLEAR_OVERLAP_FRAC="${GT_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 GT_MIN_NUCLEAR_OVERLAP_BINS="${GT_MIN_NUCLEAR_OVERLAP_BINS:-2}"
+
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_ppo_eval_* 2>/dev/null | head -n 1 || true)
+fi
+if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
+  echo "Current nucleus-based PPO eval run not found. Set PPO_EVAL_RUN_DIR." >&2
+  exit 1
+fi
 
 NORMALIZE_DISTANCES_FLAG="--no-normalize_distances"
 if [[ "$NORMALIZE_DISTANCES" == "true" || "$NORMALIZE_DISTANCES" == "1" ]]; then

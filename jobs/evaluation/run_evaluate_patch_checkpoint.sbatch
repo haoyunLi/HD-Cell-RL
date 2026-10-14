@@ -31,13 +31,13 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/xdg_cache_${SLURM_JOB_ID:-$$}}"
 mkdir -p "$PYTHONPYCACHEPREFIX" "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 # Paste the patch-trained best checkpoint here before submitting.
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-runs/human_colorectal_patch_full_grpo_20260520T203706Z/checkpoints/best_model.pt}"
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_ppo_eval_20260511T153658Z}"
-PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/human_colorectal_patch_episode_build/human_colorectal_patches_index.csv}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
+PATCHES_INDEX_PATH="${PATCHES_INDEX_PATH:-runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_index.csv}"
 BASE_CONFIG="${BASE_CONFIG:-}"
-OUTPUT_DIR="${OUTPUT_DIR:-runs/human_colorectal_patch_eval_intermediate}"
+OUTPUT_DIR="${OUTPUT_DIR:-runs/colorectal_nucleus_based_patch_eval_intermediate}"
 EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-runs}"
-EVAL_RUN_NAME="${EVAL_RUN_NAME:-human_colorectal_patch_eval}"
+EVAL_RUN_NAME="${EVAL_RUN_NAME:-colorectal_nucleus_based_patch_eval}"
 POLICY_MODE="${POLICY_MODE:-greedy}"
 RUN_DEVICE="${RUN_DEVICE:-cpu}"
 MAX_TARGET_CELLS="${MAX_TARGET_CELLS:-0}"
@@ -46,11 +46,11 @@ MAX_EVAL_PATCHES="${MAX_EVAL_PATCHES:-15}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-1000}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-first}"
 EVAL_SEED="${EVAL_SEED:-7}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
-EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
+EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
 
 if [[ -z "$CHECKPOINT_PATH" ]]; then
   echo "CHECKPOINT_PATH is required." >&2
@@ -60,6 +60,17 @@ if [[ -z "$CHECKPOINT_PATH" ]]; then
 fi
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
   echo "Checkpoint file not found: $CHECKPOINT_PATH" >&2
+  exit 1
+fi
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_ppo_eval_* 2>/dev/null | head -n 1 || true)
+fi
+if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
+  echo "Current nucleus-based PPO eval run not found. Set PPO_EVAL_RUN_DIR." >&2
+  exit 1
+fi
+if [[ ! -f "$PATCHES_INDEX_PATH" ]]; then
+  echo "Current nucleus-based patch index not found: $PATCHES_INDEX_PATH" >&2
   exit 1
 fi
 

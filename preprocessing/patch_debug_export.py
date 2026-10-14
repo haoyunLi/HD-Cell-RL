@@ -16,7 +16,7 @@ from preprocessing.patch_debug_plots import save_patch_overview_plot
 from preprocessing.ppo_eval_metrics import normalize_cell_id
 
 
-PATCH_DEBUG_SCHEMA_VERSION = "1.1"
+PATCH_DEBUG_SCHEMA_VERSION = "1.2"
 
 
 def export_patch_debug_bundle(
@@ -404,6 +404,39 @@ def _build_patch_payload(
                 "owner_conflict": bool(len(owner_ids) > 1),
                 "overlap_category": overlap_category,
                 "trace_only": bool(not pred_rows and gt_row is None),
+                "em_top1_cell_id": (
+                    None if trace_row is None else trace_row.get("em_top1_cell_id")
+                ),
+                "em_top1_probability": (
+                    None
+                    if trace_row is None
+                    else _finite_or_none(trace_row.get("em_top1_probability"))
+                ),
+                "em_top2_probability": (
+                    None
+                    if trace_row is None
+                    else _finite_or_none(trace_row.get("em_top2_probability"))
+                ),
+                "em_margin": (
+                    None
+                    if trace_row is None
+                    else _finite_or_none(trace_row.get("em_margin"))
+                ),
+                "em_normalized_entropy": (
+                    None
+                    if trace_row is None
+                    else _finite_or_none(trace_row.get("em_normalized_entropy"))
+                ),
+                "em_is_ambiguous": (
+                    bool(trace_row.get("em_is_ambiguous", False))
+                    if trace_row is not None
+                    else False
+                ),
+                "em_is_nuclear_locked": (
+                    bool(trace_row.get("em_is_nuclear_locked", False))
+                    if trace_row is not None
+                    else False
+                ),
                 "inside_core": bool(
                     core_bounds["x_min"] <= float(source_row["x_um"]) <= core_bounds["x_max"]
                     and core_bounds["y_min"] <= float(source_row["y_um"]) <= core_bounds["y_max"]

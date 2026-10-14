@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.codex
+*.orig
 .pytest_cache/
 cache/
 
@@ -26,9 +27,12 @@ external/STCS/
 logs/archive/
 
 # Local input/test data
+/data/paired_hd_xenium/
+/data/xenium_synthetic/
 Human_Colorectal/
 colorectal_sc_data/
-colorectal_pseudo_visium_hd_output_full_0.25/
+colorectal_nucleus_based/
+colorectal_nucleus_based_multi_owner_v2
 OLD_CHAT_PROJECT_HANDOFF.md
 web/patch-debug/node_modules/
 web/patch-debug/dist/

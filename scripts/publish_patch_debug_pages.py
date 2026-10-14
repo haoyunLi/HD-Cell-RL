@@ -8,15 +8,18 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PAGES_BRANCH = "gh-pages"
-DEFAULT_EVAL_GLOB = "human_colorectal_patch_overfit4_eval_*"
+DEFAULT_EVAL_GLOB = "colorectal_nucleus_based_patch_overfit4_eval_*"
+DEFAULT_PROGRESS_REPORT_DIR = REPO_ROOT / "web" / "progress-report"
 
 
 class PublishError(RuntimeError):
@@ -34,6 +37,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-root", type=Path, default=REPO_ROOT / "runs")
     parser.add_argument("--eval-glob", default=DEFAULT_EVAL_GLOB)
     parser.add_argument("--frontend-dir", type=Path, default=REPO_ROOT / "web" / "patch-debug")
+    parser.add_argument(
+        "--progress-report-dir",
+        type=Path,
+        default=DEFAULT_PROGRESS_REPORT_DIR,
+        help="Static Reveal deck published at /progress-report/ alongside the patch debugger.",
+    )
     parser.add_argument("--remote", default="origin")
     parser.add_argument(
         "--snapshot-dir",
@@ -61,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     manifest = _load_and_validate_manifest(patch_debug_dir)
 
     frontend_dir = args.frontend_dir.expanduser().resolve()
+    progress_report_dir = args.progress_report_dir.expanduser().resolve()
+    _validate_progress_report(progress_report_dir)
     if not args.skip_build:
         _run(("npm", "run", "build"), cwd=frontend_dir)
     frontend_dist = frontend_dir / "dist"
@@ -73,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             patch_debug_dir=patch_debug_dir,
             eval_run_dir=eval_run_dir,
             manifest=manifest,
+            progress_report_dir=progress_report_dir,
             site_dir=site_dir,
         )
         if args.snapshot_dir is not None:
@@ -91,6 +103,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         remote_url = _remote_url(repo_root=REPO_ROOT, remote=str(args.remote))
         _push_pages_commit(site_dir=site_dir, remote_url=remote_url)
         print(f"Published {eval_run_dir.name} as {PAGES_BRANCH} commit {commit}")
+        print("Progress report: https://haoyunli.github.io/HD-Cell-RL/progress-report/")
 
 
 def _resolve_eval_run(*, eval_run_dir: Path | None, eval_root: Path, eval_glob: str) -> Path:
@@ -181,12 +194,41 @@ def _validate_frontend_dist(frontend_dist: Path) -> None:
     _reject_symlinks(dist)
 
 
+def _validate_progress_report(progress_report_dir: Path) -> None:
+    report = progress_report_dir.expanduser().resolve()
+    index_path = report / "index.html"
+    if not index_path.is_file():
+        raise PublishError(f"progress report entry point not found: {index_path}")
+    _reject_symlinks(report)
+
+    index_html = index_path.read_text(encoding="utf-8")
+    references = re.findall(r'(?:src|href)="([^"]+)"', index_html)
+    for reference in references:
+        if reference.startswith(("http://", "https://", "#")):
+            continue
+        relative = PurePosixPath(urlsplit(reference).path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise PublishError(f"progress report asset must use a safe relative path: {reference}")
+        resolved = (report / Path(*relative.parts)).resolve()
+        if not resolved.is_relative_to(report) or not resolved.is_file():
+            raise PublishError(f"progress report asset not found: {reference}")
+
+    forbidden = ("/taiga/", "/u/haoyunli/", "/projects/")
+    for path in report.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".html", ".css", ".js", ".md", ".json"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(prefix in text for prefix in forbidden):
+            raise PublishError(f"progress report contains an internal absolute path: {path}")
+
+
 def _build_snapshot(
     *,
     frontend_dist: Path,
     patch_debug_dir: Path,
     eval_run_dir: Path,
     manifest: dict[str, Any],
+    progress_report_dir: Path,
     site_dir: Path,
 ) -> None:
     _reject_symlinks(patch_debug_dir)
@@ -198,6 +240,7 @@ def _build_snapshot(
         json.dumps(sanitized_manifest, indent=2) + "\n",
         encoding="utf-8",
     )
+    shutil.copytree(progress_report_dir, site_dir / "progress-report")
     (site_dir / ".nojekyll").touch()
     _reject_internal_json_paths(site_dir)
 

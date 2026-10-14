@@ -1,0 +1,22 @@
+# Predeclared diagnostic tolerances, not a validated biological specification.
+seeds: [20260909, 20260910, 20260911]
+unknown_source_area_um2: 64.0
+type_context_scale_um: 24.0
+nuclear_fraction: 0.25
+membrane_strength: 1.0
+acceptance:
+  mean_ratio_min: 0.8
+  mean_ratio_max: 1.25
+  distribution_ks_max: 0.2
+  zero_fraction_absolute_error_max: 0.1
+  neighbor_correlation_absolute_error_max: 0.2
+  cell_cv_ratio_min: 0.67
+  cell_cv_ratio_max: 1.5
+variants:
+  - {name: region_depth_only, unknown: false, profile: scdesign3, density: empirical, sigma_um: 8, technical_fraction: 0}
+  - {name: components_sigma4, unknown: true, profile: scdesign3, density: empirical, sigma_um: 4, technical_fraction: 0}
+  - {name: components_sigma8, unknown: true, profile: scdesign3, density: empirical, sigma_um: 8, technical_fraction: 0}
+  - {name: components_sigma12, unknown: true, profile: scdesign3, density: empirical, sigma_um: 12, technical_fraction: 0}
+  - {name: generator_scrna_sigma8, unknown: true, profile: generator_scrna, density: empirical, sigma_um: 8, technical_fraction: 0}
+  - {name: constant_density_sigma8, unknown: true, profile: scdesign3, density: constant, sigma_um: 8, technical_fraction: 0}
+  - {name: technical_1pct_sensitivity, unknown: true, profile: scdesign3, density: empirical, sigma_um: 8, technical_fraction: 0.01}

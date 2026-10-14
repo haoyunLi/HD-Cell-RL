@@ -1,0 +1,38 @@
+name: CPU correctness tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-core.txt
+      - name: Install CPU runtime
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-core.txt
+      - name: Regression tests (no real datasets or GPU)
+        run: >-
+          python -B -m unittest
+          tests.test_engineering_safety tests.test_em_assignment
+          tests.test_patch_training tests.test_ppo_training
+          tests.test_episode_artifacts tests.test_ppo_eval_metrics
+          tests.test_evaluate_patch_checkpoint
+          tests.test_project_protocol tests.test_pseudo_components
+          tests.test_run_em_weight_sweep tests.test_summarize_donor_disjoint_em_benchmark
+      - name: Check job entry point syntax
+        run: find jobs -name '*.sbatch' -print0 | xargs -0 -n 1 bash -n

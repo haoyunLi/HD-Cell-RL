@@ -533,7 +533,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Inputs")
-        default_run_dir = args.ppo_eval_run_dir or "runs/human_colorectal_ppo_eval_20260421T204714Z"
+        default_run_dir = args.ppo_eval_run_dir or ""
         ppo_eval_run_dir = st.text_input("PPO eval run dir", value=default_run_dir)
         checkpoint_override = st.text_input("Checkpoint override", value=args.checkpoint or "")
         device = st.selectbox(

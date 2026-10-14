@@ -23,10 +23,10 @@ source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate $WORK_DIR/cellpose
 
 # Run the Cellpose-SAM segmentation script
-mkdir -p workspace_outputs/pseudo_human_colorectal/intermediate
+mkdir -p workspace_outputs/colorectal_nucleus_based/intermediate
 python preprocessing/cellpose_segmentation.py \
-    --img_path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal.png \
-    --output_dir workspace_outputs/pseudo_human_colorectal/intermediate/cellpose_sam_human_colorectal_output
+    --img_path workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png \
+    --output_dir workspace_outputs/colorectal_nucleus_based/intermediate/cellpose_sam_colorectal_nucleus_based_output
 
 # Deactivate conda environment
 conda deactivate

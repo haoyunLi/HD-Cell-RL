@@ -29,32 +29,40 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib_${SLURM_JOB_ID:-$$}}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/xdg_cache_${SLURM_JOB_ID:-$$}}"
 mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
-PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-runs/human_colorectal_ppo_eval_20260424T204220Z}"
+PPO_EVAL_RUN_DIR="${PPO_EVAL_RUN_DIR:-}"
 EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-runs}"
 OVERLAY_MAX_CELLS="${OVERLAY_MAX_CELLS:-300}"
 OVERLAY_SELECTION="${OVERLAY_SELECTION:-first}"
 EVAL_SEED="${EVAL_SEED:-7}"
 PRED_MIN_NUCLEAR_OVERLAP_FRAC="${PRED_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 PRED_MIN_NUCLEAR_OVERLAP_BINS="${PRED_MIN_NUCLEAR_OVERLAP_BINS:-2}"
-GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_cell_bins.csv.gz}"
-GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
-GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_pseudo_visium_hd_output_full_0.25/ground_truth_cell_assignments.csv}"
-GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-colorectal_sc_data/CRC_GSE166555_raw_tumor.h5}"
+GT_CELL_BINS_PATH="${GT_CELL_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_cell_bins.csv.gz}"
+GT_NUCLEAR_BINS_PATH="${GT_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/ground_truth/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
+GT_CELL_ASSIGNMENTS_CSV="${GT_CELL_ASSIGNMENTS_CSV:-colorectal_nucleus_based/ground_truth_cell_assignments.csv}"
+GT_SC_EXPRESSION_H5="${GT_SC_EXPRESSION_H5:-../Bin2Cell_Validation/outputs/ground_truth/colorectal_nucleus_based/simulation/scdesign3/scdesign3_synthetic_counts.h5}"
 GT_MIN_NUCLEAR_OVERLAP_FRAC="${GT_MIN_NUCLEAR_OVERLAP_FRAC:-0.3}"
 GT_MIN_NUCLEAR_OVERLAP_BINS="${GT_MIN_NUCLEAR_OVERLAP_BINS:-2}"
-EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_colorectal_pseudo_square_002um_nuclear_bins.csv.gz}"
+
+if [[ -z "$PPO_EVAL_RUN_DIR" ]]; then
+  PPO_EVAL_RUN_DIR=$(ls -dt runs/colorectal_nucleus_based_ppo_eval_* 2>/dev/null | head -n 1 || true)
+fi
+if [[ ! -d "$PPO_EVAL_RUN_DIR" ]]; then
+  echo "Current nucleus-based PPO eval run not found. Set PPO_EVAL_RUN_DIR." >&2
+  exit 1
+fi
+EXTERNAL_NUCLEAR_BINS_PATH="${EXTERNAL_NUCLEAR_BINS_PATH:-workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz}"
 
 RUN_BIN2CELL="${RUN_BIN2CELL:-true}"
 RUN_SMURF="${RUN_SMURF:-true}"
 RUN_STCS="${RUN_STCS:-true}"
 SKIP_MISSING="${SKIP_MISSING:-false}"
 
-BIN2CELL_ASSIGNMENTS="${BIN2CELL_ASSIGNMENTS:-workspace_outputs/pseudo_human_colorectal/bin2cell_results_colorectal_0.25/human_colorectal_bin2cell_assignments.csv}"
-BIN2CELL_PIPELINE_JSON="${BIN2CELL_PIPELINE_JSON:-workspace_outputs/pseudo_human_colorectal/bin2cell_results_colorectal_0.25/human_colorectal_bin2cell_pipeline_summary.json}"
-SMURF_ASSIGNMENTS="${SMURF_ASSIGNMENTS:-workspace_outputs/pseudo_human_colorectal/smurf_results_colorectal_0.25/human_colorectal_smurf_assignments.csv}"
-SMURF_PIPELINE_JSON="${SMURF_PIPELINE_JSON:-workspace_outputs/pseudo_human_colorectal/smurf_results_colorectal_0.25/human_colorectal_smurf_pipeline_summary.json}"
-STCS_ASSIGNMENTS="${STCS_ASSIGNMENTS:-workspace_outputs/pseudo_human_colorectal/stcs_results_colorectal_0.25/human_colorectal_stcs_assignments.csv}"
-STCS_PIPELINE_JSON="${STCS_PIPELINE_JSON:-workspace_outputs/pseudo_human_colorectal/stcs_results_colorectal_0.25/human_colorectal_stcs_pipeline_summary.json}"
+BIN2CELL_ASSIGNMENTS="${BIN2CELL_ASSIGNMENTS:-workspace_outputs/colorectal_nucleus_based/bin2cell_results/colorectal_nucleus_based_bin2cell_assignments.csv}"
+BIN2CELL_PIPELINE_JSON="${BIN2CELL_PIPELINE_JSON:-workspace_outputs/colorectal_nucleus_based/bin2cell_results/colorectal_nucleus_based_bin2cell_pipeline_summary.json}"
+SMURF_ASSIGNMENTS="${SMURF_ASSIGNMENTS:-workspace_outputs/colorectal_nucleus_based/smurf_results/colorectal_nucleus_based_smurf_assignments.csv}"
+SMURF_PIPELINE_JSON="${SMURF_PIPELINE_JSON:-workspace_outputs/colorectal_nucleus_based/smurf_results/colorectal_nucleus_based_smurf_pipeline_summary.json}"
+STCS_ASSIGNMENTS="${STCS_ASSIGNMENTS:-workspace_outputs/colorectal_nucleus_based/stcs_results/colorectal_nucleus_based_stcs_assignments.csv}"
+STCS_PIPELINE_JSON="${STCS_PIPELINE_JSON:-workspace_outputs/colorectal_nucleus_based/stcs_results/colorectal_nucleus_based_stcs_pipeline_summary.json}"
 
 echo "Working directory: $WORK_DIR"
 echo "Python: $PYTHON_BIN"
@@ -119,15 +127,15 @@ run_eval() {
 }
 
 if [[ "$RUN_BIN2CELL" == "true" || "$RUN_BIN2CELL" == "1" ]]; then
-  run_eval "bin2cell" "Bin2Cell" "human_colorectal_bin2cell_eval_only" "$BIN2CELL_ASSIGNMENTS" "$BIN2CELL_PIPELINE_JSON"
+  run_eval "bin2cell" "Bin2Cell" "colorectal_nucleus_based_bin2cell_eval_only" "$BIN2CELL_ASSIGNMENTS" "$BIN2CELL_PIPELINE_JSON"
 fi
 
 if [[ "$RUN_SMURF" == "true" || "$RUN_SMURF" == "1" ]]; then
-  run_eval "smurf" "SMURF" "human_colorectal_smurf_eval_only" "$SMURF_ASSIGNMENTS" "$SMURF_PIPELINE_JSON"
+  run_eval "smurf" "SMURF" "colorectal_nucleus_based_smurf_eval_only" "$SMURF_ASSIGNMENTS" "$SMURF_PIPELINE_JSON"
 fi
 
 if [[ "$RUN_STCS" == "true" || "$RUN_STCS" == "1" ]]; then
-  run_eval "stcs" "STCS" "human_colorectal_stcs_eval_only" "$STCS_ASSIGNMENTS" "$STCS_PIPELINE_JSON"
+  run_eval "stcs" "STCS" "colorectal_nucleus_based_stcs_eval_only" "$STCS_ASSIGNMENTS" "$STCS_PIPELINE_JSON"
 fi
 
 echo ""

@@ -1,0 +1,101 @@
+base_ppo_config: configs/ppo_training.full_grpo.yaml
+
+# Formal comparison run for the reward formula selected without test tuning.
+# Selection provenance:
+# - validation: 20 exact greedy sequential patch rollouts
+# - held-out test: one evaluation of the validation winner
+# - test macro cell IoU: 0.6979569243 -> 0.7075959857
+#
+# Keep the previous overfit4 protocol fixed. Only the validated reward formula
+# changes: legacy w5 compatibility, lower calibrated shape, and one geometry
+# term (distance). The scRNA expression reference and shape model remain those
+# resolved by ppo_training.full_grpo.yaml.
+base_config_overrides:
+  reward:
+    w1: 0.00
+    w2: 0.55
+    w3: 0.00
+    w4: 0.035
+    w5: 0.15
+    stop_lambda: 0.05
+    competition_margin_weight: 0.10
+    competition_margin_radius_um: 20.0
+    competition_margin_clip: 5.0
+    competition_margin_affects_stop: false
+  shape_prior:
+    # Robust-IQR calibration from the validation reward audit, lambda=0.25.
+    weight: 0.006259260981369026
+  stopping:
+    moving_avg_window: 10
+    patience: 5
+
+run:
+  name: colorectal_nucleus_based_patch_overfit4_w5_validated
+  output_root: runs
+  seed: 7
+  device: cuda
+  rollout_devices:
+    - cuda:0
+    - cuda:1
+    - cuda:2
+    - cuda:3
+  rollout_worker_mode: process
+  batch_patches: 16
+  max_updates: 500
+  policy_mode: sample
+  vf_coef: 0.0
+  warm_start_checkpoint: ""
+
+patch_training:
+  patches_index_path: runs/colorectal_nucleus_based_patch_episode_build/colorectal_nucleus_based_patches_overfit4_64um_index.csv
+  max_steps_per_patch: 16
+  margin_cells_compete: true
+  use_core_cells_for_score: true
+  score_normalization: mean_expression_bins
+  force_fill_expression_bins: true
+  fill_target: reachable_expression_bins
+  stop_action_mode: auto_no_improve_after_filled
+  agent_mode: multi_cell_global_delta
+  after_fill_actions: replace_only
+  global_delta_epsilon: 1.0e-6
+  competition_margin_enabled: false
+  rollout_backend: torch_gpu
+  cache_patch_contexts: true
+
+em_assignment:
+  enabled: true
+  use_existing_rl_candidate_max_distance: true
+  bin_universe:
+    non_nuclear_filter: all
+  background:
+    enabled: false
+    owned_logit_intercept: -6.0
+    expression_confidence_weight: 12.0
+  spatial_weight: 1.0
+  expression_weight: 0.25
+  damping: 0.5
+  max_iterations: 15
+  convergence:
+    top_owner_change_fraction: 0.01
+    mean_probability_change: 0.001
+    mean_profile_total_variation: 0.001
+  cell_specific_expression:
+    # Opt in after validation; false preserves the original q @ LL behavior.
+    enabled: false
+    relative_prior_strength: 1.0
+    profile_update_damping: 1.0
+    compatibility_mode: standard
+    # Used only when compatibility_mode is spatial_block_crossfit.
+    spatial_crossfit_block_size_um: 8.0
+    # Default preserves the previous nuclear-UMI-depth reliability rule.
+    reliability_mode: nuclear_depth
+    heldout_reliability_grid_size: 101
+  ambiguity:
+    entropy_threshold: 0.50
+  rl_integration:
+    initialize_from_em: true
+    lock_nuclear_bins: true
+    refine_ambiguous_only: true
+  artifacts:
+    save: false
+    debug_patch_ids: []

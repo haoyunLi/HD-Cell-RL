@@ -21,14 +21,14 @@ source /sw/apps/anaconda3/2024.10/etc/profile.d/conda.sh
 conda activate $WORK_DIR/Bin2Cell_Validation
 
 # Run the exact official-bin nuclear annotation step
-mkdir -p workspace_outputs/pseudo_human_colorectal/intermediate
+mkdir -p workspace_outputs/colorectal_nucleus_based/intermediate/nuclei
 python3 preprocessing/pixel_to_square_002um_bins.py \
-  --pixel-mapping-csv workspace_outputs/pseudo_human_colorectal/intermediate/cellpose_sam_human_colorectal_output/cropped_visium_hd_human_Colorectal_pixel_to_cell_mapping_full.csv.gz \
-  --tissue-positions-parquet Human_Colorectal/output/binned_outputs/square_002um/spatial/tissue_positions.parquet \
-  --output-path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins.csv.gz \
-  --summary-path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins.summary.json \
-  --overlay-path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal_square_002um_nuclear_bins_overlay.png \
-  --cropped-image-path workspace_outputs/pseudo_human_colorectal/intermediate/cropped_visium_hd_human_Colorectal.png \
+  --pixel-mapping-csv workspace_outputs/colorectal_nucleus_based/intermediate/cellpose_sam_colorectal_nucleus_based_output/cropped_visium_hd_colorectal_nucleus_based_pixel_to_cell_mapping_full.csv.gz \
+  --tissue-positions-parquet colorectal_nucleus_based/spatial/tissue_positions.parquet \
+  --output-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.csv.gz \
+  --summary-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins.summary.json \
+  --overlay-path workspace_outputs/colorectal_nucleus_based/intermediate/nuclei/colorectal_nucleus_based_square_002um_nuclear_bins_overlay.png \
+  --cropped-image-path workspace_outputs/colorectal_nucleus_based/intermediate/cropped_visium_hd_colorectal_nucleus_based.png \
   --overlay-downsample-factor 2 \
   --microns-per-pixel 0.2737012522439323 \
   --chunk-size 10000000 \

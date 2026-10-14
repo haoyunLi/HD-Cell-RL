@@ -28,7 +28,7 @@ These directories remain at the repository root because current configs and save
 | Path | Contents |
 | --- | --- |
 | `Human_Colorectal/` | Original Visium HD input and vendor output |
-| `colorectal_pseudo_visium_hd_output_full_0.25/` | Pseudo-HD matrix, spatial files, and simulated assignments |
+| `colorectal_nucleus_based/` | Current nucleus-based pseudo-HD matrix, spatial files, and simulated assignments |
 | `colorectal_sc_data/` | Colorectal scRNA reference matrices and metadata |
 
 Do not rename these inputs in place. New workflows should expose input paths through config or environment variables so a later data migration does not require algorithm changes.

@@ -1,0 +1,27 @@
+# All folds reuse already-inspected development/audit contexts, never fresh test.
+seeds: [20260909, 20260910, 20260911]
+block_width_um: 16
+density_sigma_um: 16
+interpolation_sigma_um: 8
+ridge: 0.1
+residual_sigma_grid_um: [4, 8, 16, 32]
+unknown_source_area_um2: 64
+unknown_sigma_um: 8
+type_context_scale_um: 24
+nuclear_fraction: 0.25
+membrane_strength: 1.0
+technical_fraction: 0.0
+variants:
+  - {name: uniform_budget, features: global, spatial: false, patch_effect: false}
+  - {name: geometry_mean, features: geometry, spatial: false, patch_effect: false}
+  - {name: composition_mean, features: composition, spatial: false, patch_effect: false}
+  - {name: composition_spatial, features: composition, spatial: true, patch_effect: false}
+  - {name: composition_spatial_patch, features: composition, spatial: true, patch_effect: true}
+acceptance:
+  mean_ratio_min: 0.8
+  mean_ratio_max: 1.25
+  distribution_ks_max: 0.2
+  zero_fraction_absolute_error_max: 0.1
+  neighbor_correlation_absolute_error_max: 0.2
+  cell_cv_ratio_min: 0.67
+  cell_cv_ratio_max: 1.5

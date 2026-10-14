@@ -47,6 +47,26 @@ class ProjectProtocolTests(unittest.TestCase):
         m.add_patch(context=context('p1'), rows=[], target_cell_ids=['A'])
         self.assertEqual(m.finalize()[0], [])
 
+    def test_validation_split_checks_cross_core_margin_and_bounds(self):
+        import pandas as pd
+        from hd_cell_rl.patch_validation import validate_split_indexes
+        def frame(p, core, margin, x):
+            return pd.DataFrame([dict(patch_id=p, core_cell_ids=core, margin_cell_ids=margin,
+                context_x_min=x, context_x_max=x+1, context_y_min=0, context_y_max=1)])
+        train = frame('a', '["A"]', '[]', 0)
+        with self.assertRaisesRegex(ValueError, 'cells overlap'):
+            validate_split_indexes(train, frame('b','["B"]','["A"]',10))
+        with self.assertRaisesRegex(ValueError, 'rectangles overlap'):
+            validate_split_indexes(train, frame('b','["B"]','[]',0))
+        validate_split_indexes(train, frame('b','["B"]','[]',10))
+
+    def test_formal_training_fails_closed(self):
+        from hd_cell_rl.patch_validation import require_training_admission
+        with self.assertRaisesRegex(ValueError, 'independent validation'):
+            require_training_admission(None, None, {'purpose':'formal'}, {})
+        with self.assertRaisesRegex(ValueError, 'missing data-realism'):
+            require_training_admission(None, None, {'purpose':'formal'}, {'enabled':True})
+        require_training_admission(None, None, {}, {})
 
     def test_source_snapshot_is_recoverable_and_never_overwritten(self):
         import hashlib, json, tarfile, tempfile
@@ -75,6 +95,47 @@ class ProjectProtocolTests(unittest.TestCase):
             for ctx,rows in claims[::(-1 if reverse else 1)]:m.add_patch(context=ctx,rows=rows)
             with self.assertRaisesRegex(ValueError,'nuclear ownership changed'):m.finalize()
 
+    def test_validation_selects_post_update_weights_and_restores_policy_state(self):
+        import json, tempfile, torch
+        from unittest.mock import patch
+        from tests.test_ppo_training import PPOTrainingTests
+        from tests.test_em_assignment import _episode
+        from hd_cell_rl.patch_types import PatchContext, PatchBounds
+        import scripts.run_patch_training as runner
+        cell=_episode('A',(0,0),['seed','free'],[(0,0),(2,0)],ll=[[-.1,-2.],[-.2,-1.]],seed=[1,0])
+        ctx=PatchContext(patch_id='fixture',cells=(cell,),core_cell_ids=('A',),margin_cell_ids=(),
+            outer_bounds=PatchBounds(-1,3,-1,1),core_bounds=PatchBounds(-1,3,-1,1),max_steps=2)
+        evaluated=[]
+        def evaluate(model, device):
+            evaluated.append({k:v.clone() for k,v in model.state_dict().items()})
+            from hd_cell_rl.patch_validation import PatchValidationEvaluator
+            evaluator=object.__new__(PatchValidationEvaluator)
+            evaluator.contexts=[ctx];evaluator.truth={'A':{'seed','free'}}
+            evaluator.cell_ids=['A'];evaluator.backend='legacy_cpu';evaluator.seed=12
+            state=torch.random.get_rng_state().clone();was_training=model.training
+            result=evaluator.evaluate(model,device)
+            torch.testing.assert_close(torch.random.get_rng_state(),state)
+            self.assertEqual(model.training,was_training)
+            self.assertEqual(result['n_cells'],1)
+            return {'mean_core_cell_iou':.8 if len(evaluated)==1 else .7}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);base=PPOTrainingTests()._write_minimal_config(root,batch_cells=1,group_relative_enabled=False)
+            cfg={'base_ppo_config':str(base),'run':{'name':'validation_fixture','device':'cpu','max_updates':2,'batch_patches':1},
+                 'patch_training':{'patches_index_path':str(root/'patches.csv'),'rollout_backend':'legacy_cpu'},
+                 'validation':{'enabled':True,'role':'validation'}}
+            file=root/'patch.yaml';file.write_text(yaml.safe_dump(cfg))
+            with patch.object(runner,'_parse_args',return_value=SimpleNamespace(config=str(file))), \
+                 patch.object(runner,'PatchValidationEvaluator',return_value=SimpleNamespace(every=1,evaluate=evaluate)), \
+                 patch.object(runner,'PatchDataset',return_value=SimpleNamespace(n_patches=1,close=lambda:None)), \
+                 patch.object(runner,'collect_patch_contexts',return_value=[ctx]):
+                runner.main()
+            run=next((root/'runs').iterdir())
+            best=torch.load(run/'checkpoints/best_model.pt',weights_only=True)
+            final=torch.load(run/'checkpoints/final_model.pt',weights_only=True)
+            self.assertEqual(best['update_index'],1);self.assertEqual(final['update_index'],2)
+            self.assertEqual(best['selection_basis'],'validation_core_cell_iou_post_update')
+            for key,value in best['model_state_dict'].items():torch.testing.assert_close(value,evaluated[0][key])
+            self.assertEqual(json.loads((run/'summary.json').read_text())['best_validation_core_cell_iou'],.8)
 
     def test_seeds_conflicts_and_duplicate_rows_rejected(self):
         m = PatchOwnershipMerger()

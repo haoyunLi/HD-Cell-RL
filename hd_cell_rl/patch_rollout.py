@@ -527,10 +527,14 @@ def collect_patch_trajectories_batched(
     envs = [_build_patch_env(context=ctx, device=device, rollout_backend=rollout_backend) for ctx in contexts]
     observations: list[dict[str, Any]] = []
     infos: list[dict[str, Any]] = []
+    initial_masks: list[dict[str, np.ndarray] | None] = []
+    initial_infos: list[dict[str, Any]] = []
     for env in envs:
         obs, info = env.reset()
         observations.append(obs)
         infos.append(info)
+        initial_masks.append(env.final_masks() if capture_trace else None)
+        initial_infos.append(dict(info))
 
     steps_by_env: list[list[PatchStep]] = [[] for _ in envs]
     total_rewards = [0.0 for _ in envs]
@@ -596,7 +600,44 @@ def collect_patch_trajectories_batched(
         t0 = time.perf_counter()
         for row, idx in enumerate(active):
             obs = observations[idx]
+            trace_info_before = infos[idx]
+            objective_before = (
+                envs[idx].objective_components()
+                if capture_trace
+                and isinstance(envs[idx], TorchSingleAgentPatchEnv)
+                else None
+            )
+            choice_diagnostics = (
+                _single_agent_action_choice_diagnostics(
+                    env=envs[idx],
+                    action=int(actions[row]),
+                )
+                if capture_trace and isinstance(envs[idx], TorchSingleAgentPatchEnv)
+                else {}
+            )
+            action_events = (
+                _single_agent_action_events(
+                    env=envs[idx],
+                    context=contexts[idx],
+                    action=int(actions[row]),
+                )
+                if capture_trace and isinstance(envs[idx], TorchSingleAgentPatchEnv)
+                else ()
+            )
+            phase = (
+                _trace_phase_from_info(trace_info_before)
+                if capture_trace
+                else None
+            )
             next_obs, reward, terminated, truncated, info = envs[idx].step(int(actions[row]))
+            objective_delta_components = None
+            if objective_before is not None:
+                objective_after = envs[idx].objective_components()
+                objective_delta_components = _objective_component_delta(
+                    before=objective_before,
+                    after=objective_after,
+                    reward=float(reward),
+                )
             step_done = bool(terminated or truncated)
             total_rewards[idx] += float(reward)
             steps_by_env[idx].append(
@@ -609,6 +650,32 @@ def collect_patch_trajectories_batched(
                     done=step_done,
                     old_log_prob=float(old_log_probs[row]),
                     old_value=float(old_values[row]),
+                    action_events=action_events,
+                    n_local_actions=int(len(action_events)) if capture_trace else 0,
+                    n_noop_actions=0,
+                    phase=phase,
+                    outcome="applied" if capture_trace and action_events else None,
+                    patch_score_after=(float(info.get("patch_score", 0.0)) if capture_trace else None),
+                    raw_patch_score_after=(
+                        float(info.get("raw_total_core_reward", 0.0))
+                        if capture_trace
+                        else None
+                    ),
+                    owned_target_count_after=(
+                        int(info.get("n_force_fill_owned_expression_bins", 0))
+                        if capture_trace
+                        else None
+                    ),
+                    target_count=(
+                        int(info.get("n_force_fill_expression_bins", 0))
+                        if capture_trace
+                        else None
+                    ),
+                    objective_delta_components=objective_delta_components,
+                    available_action_count=choice_diagnostics.get("available_action_count"),
+                    chosen_action_reward=choice_diagnostics.get("chosen_action_reward"),
+                    best_available_action_reward=choice_diagnostics.get("best_available_action_reward"),
+                    chosen_action_reward_rank=choice_diagnostics.get("chosen_action_reward_rank"),
                 )
             )
             observations[idx] = next_obs
@@ -642,6 +709,27 @@ def collect_patch_trajectories_batched(
                 patch_score=float(info.get("patch_score", 0.0)),
                 metrics=metrics,
                 final_masks=envs[idx].final_masks(),
+                initial_masks=initial_masks[idx],
+                initial_patch_score=(
+                    float(initial_infos[idx].get("patch_score", 0.0))
+                    if capture_trace
+                    else None
+                ),
+                initial_raw_patch_score=(
+                    float(initial_infos[idx].get("raw_total_core_reward", 0.0))
+                    if capture_trace
+                    else None
+                ),
+                initial_owned_target_count=(
+                    int(initial_infos[idx].get("n_force_fill_owned_expression_bins", 0))
+                    if capture_trace
+                    else None
+                ),
+                target_count=(
+                    int(initial_infos[idx].get("n_force_fill_expression_bins", 0))
+                    if capture_trace
+                    else None
+                ),
             )
         )
 
@@ -653,3 +741,82 @@ def collect_patch_trajectories_batched(
         "rollout_n_model_calls": float(model_calls),
     }
     return trajectories, timing
+
+
+def _trace_phase_from_info(info: dict[str, Any]) -> str:
+    target = int(info.get("n_force_fill_expression_bins", 0))
+    owned = int(info.get("n_force_fill_owned_expression_bins", 0))
+    return "postfill" if owned >= target else "prefill"
+
+
+def _objective_component_delta(
+    *,
+    before: dict[str, float],
+    after: dict[str, float],
+    reward: float,
+) -> dict[str, float]:
+    """Return component deltas and their residual against the emitted reward."""
+    keys = sorted((set(before) | set(after)).difference({"total"}))
+    out = {
+        key: float(after.get(key, 0.0) - before.get(key, 0.0))
+        for key in keys
+    }
+    component_sum = float(sum(out.values()))
+    out["component_sum"] = component_sum
+    out["reward_residual"] = float(reward - component_sum)
+    return out
+
+
+def _single_agent_action_choice_diagnostics(
+    *,
+    env: TorchSingleAgentPatchEnv,
+    action: int,
+) -> dict[str, float | int]:
+    """Rank the selected action by the environment's exposed positive delta."""
+    action_index = int(action) - 1
+    rewards = env._cached_action_rewards.detach().cpu().numpy().astype(
+        np.float64,
+        copy=False,
+    )
+    if action_index < 0 or action_index >= int(rewards.shape[0]):
+        return {}
+    chosen = float(rewards[action_index])
+    tolerance = 1.0e-12
+    rank = int(1 + np.sum(rewards > chosen + tolerance))
+    best = float(np.max(rewards)) if rewards.size else chosen
+    return {
+        "available_action_count": int(rewards.size),
+        "chosen_action_reward": chosen,
+        "best_available_action_reward": best,
+        "chosen_action_reward_rank": rank,
+    }
+
+
+def _single_agent_action_events(
+    *,
+    env: TorchSingleAgentPatchEnv,
+    context: PatchContext,
+    action: int,
+) -> tuple[PatchActionEvent, ...]:
+    """Describe the exposed single-agent action before ``env.step`` mutates it."""
+    action_index = int(action) - 1
+    if action_index < 0 or action_index >= int(env._cached_action_cells.numel()):
+        return ()
+    cell_idx = int(env._cached_action_cells[action_index].detach().cpu().item())
+    bin_idx = int(env._cached_action_bins[action_index].detach().cpu().item())
+    is_replace = bool(env._cached_action_is_replace[action_index].detach().cpu().item())
+    old_cell_id = None
+    if is_replace:
+        old_cell_idx = int(env._cached_action_old_cells[action_index].detach().cpu().item())
+        if 0 <= old_cell_idx < len(context.cells):
+            old_cell_id = str(context.cells[old_cell_idx].cell_id)
+    cell = context.cells[cell_idx]
+    return (
+        PatchActionEvent(
+            action_type="replace" if is_replace else "add",
+            cell_id=str(cell.cell_id),
+            barcode=str(cell.candidate_bin_ids[bin_idx]),
+            old_cell_id=old_cell_id,
+            applied=True,
+        ),
+    )

@@ -8,6 +8,7 @@ then runs PPO-Clip updates on the collected transitions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
 import datetime as dt
 import os
 from pathlib import Path
@@ -824,6 +825,8 @@ def run_ppo_training(config: PPOTrainingConfig) -> PPOTrainingResult:
 
     try:
         for update_idx in range(1, int(config.max_updates) + 1):
+            evaluated_model_state = copy.deepcopy(model.state_dict())
+            evaluated_optimizer_state = copy.deepcopy(optimizer.state_dict())
             ppo_metrics, avg_batch_reward, n_episodes, n_transitions, timing = train_one_update(
                 model=model,
                 optimizer=optimizer,
@@ -848,9 +851,12 @@ def run_ppo_training(config: PPOTrainingConfig) -> PPOTrainingResult:
                         path=best_checkpoint_path,
                         model=model,
                         optimizer=optimizer,
-                        update_index=update_idx,
+                        update_index=update_idx - 1,
                         best_moving_avg_reward=best_moving_avg,
                         config=config,
+                        model_state=evaluated_model_state,
+                        optimizer_state=evaluated_optimizer_state,
+                        selection_basis="training_rollout_moving_average_pre_update",
                     )
                 else:
                     no_improve_count += 1

@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run STCS on pseudo Visium HD using PPO-aligned nuclei.")
     parser.add_argument("--pseudo_hd_dir", required=True, help="Pseudo Visium HD directory.")
     parser.add_argument("--output_dir", required=True, help="Output directory for STCS results.")
-    parser.add_argument("--dataset_name", default="human_colorectal", help="Dataset prefix.")
+    parser.add_argument("--dataset_name", default="colorectal_nucleus_based", help="Dataset prefix.")
     parser.add_argument("--stcs_repo_dir", default="external/STCS", help="Path to cloned YangLabRutgers/STCS repo.")
     parser.add_argument("--full_res_image_path", default=None, help="Optional image path stored in adata.uns['spatial'].")
     parser.add_argument("--external_nuclear_bins_path", required=True, help="PPO-aligned nuclear-bin CSV/CSV.GZ.")
@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval_context_radius_bins", type=int, default=None)
     add_ppo_format_assignment_eval_args(
         parser,
-        default_eval_run_name="human_colorectal_stcs_eval",
+        default_eval_run_name="colorectal_nucleus_based_stcs_eval",
         method_label="STCS",
     )
     return parser.parse_args()

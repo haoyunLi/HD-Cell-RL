@@ -448,9 +448,10 @@ def load_ppo_training_config(config_path: str | Path) -> PPOTrainingConfig:
     expression_confidence_pseudocount = float(reward.get("expression_confidence_pseudocount", 5.0))
     if expression_confidence_pseudocount < 0:
         raise ConfigError("reward.expression_confidence_pseudocount must be >= 0")
-    for name, val in (("w1", w1), ("stop_lambda", stop_lambda)):
-        if val <= 0:
-            raise ConfigError(f"reward.{name} must be > 0")
+    if w1 < 0:
+        raise ConfigError("reward.w1 must be >= 0")
+    if stop_lambda <= 0:
+        raise ConfigError("reward.stop_lambda must be > 0")
     for name, val in (("w2", w2), ("w3", w3)):
         if val < 0:
             raise ConfigError(f"reward.{name} must be >= 0")
